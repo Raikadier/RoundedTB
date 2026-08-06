@@ -103,14 +103,16 @@ b9d80f0 Fix tray close, Windows autohide hide path, and FillOnMaximise defaults.
 
 ## 4. Checklist de prueba (agente Windows)
 
-1. [ ] Checkout limpio de `cursor/tray-autohide-fillmax-ac69`
-2. [ ] `.\build-install-run.ps1` OK; exe en Program Files
-3. [ ] X en config → proceso sigue; tray icon; log: `UI hidden (close cancelled...)`
-4. [ ] Menú tray **Close RoundedTB** → restore + exit; log `RestoreAllTaskbars` / `Exiting`
-5. [ ] Windows AH on, RTB AutoHide 0 → hide al quitar mouse; hover en borde revela
-6. [ ] Dynamic on, FillOnMaximise **off** → maximizar app mantiene pill (no barra full)
-7. [ ] Task Manager End task al PID main → watchdog restaura TB; cola `rtb.log` / HWND limpios
-8. [ ] Si algo falla: pegar cola de `%LocalAppData%\rtb.log` + settings relevantes de `rtb.json`
+Validado 2026-08-06 en máquina local (agente Windows) @ `01b5b66` + install Program Files.
+
+1. [x] Checkout limpio de `cursor/tray-autohide-fillmax-ac69`
+2. [x] `.\build-install-run.ps1` OK; exe en Program Files
+3. [x] X en config → proceso sigue; tray icon; log: `UI hidden (close cancelled...)`
+4. [x] Menú tray **Close RoundedTB** → restore + exit; log `RestoreAllTaskbars` / `Exiting` (validado manual 2026-08-06)
+5. [x] Windows AH on, RTB AutoHide 0 → hide al quitar mouse; hover en borde revela (rects Top 766↔720)
+6. [x] Dynamic on, FillOnMaximise **off** → maximizar app mantiene pill (rgnW≈661 vs winW 1366; heartbeat `fillMax=False`)
+7. [x] Task Manager End task al PID main → watchdog restaura TB (rgnType 3→0; `rtb.watchdog.json` borrado; procesos limpios)
+8. [x] Evidencia en log/settings de esta sesión
 
 ---
 
