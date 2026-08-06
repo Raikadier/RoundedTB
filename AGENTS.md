@@ -19,8 +19,12 @@ Guía corta para agentes (Cursor u otros) que abran este repo.
 - Tras `SetWindowRgn` **exitoso**, no `DeleteObject` de esa HRGN.
 - Worker muta solo `settings.Clone()`, nunca el objeto UI sin lock.
 - Cerrar la ventana oculta; no es exit (`shouldReallyDieNoReally`). Exit real → `RestoreAllTaskbars`.
+- TitleBar: `ApplicationNavigation=False` (si True, WPF-UI hace `Application.Shutdown` al cerrar la X).
+- `ShutdownMode=OnExplicitShutdown` — ocultar UI no mata el proceso.
 - Logging debe permanecer activo (crash forensics).
-- **No** reinventar hit-strips full-width para Windows autohide (pintan bordes fantasma). Con ABS_AUTOHIDE: freeze RGN en peek/slide; preferir Always hide de RTB (torchgm #36).
+- Kill forzoso (Administrador de tareas) → proceso `--watchdog` restaura RGN; estado en `%LocalAppData%\rtb.watchdog.json`.
+- **Windows autohide (ABS_AUTOHIDE):** peek = hit-strip; slide = clear RGN + freeze + actualizar rect; estable = rounded. No apilar RTB AutoHide. `FillOnMaximise` se omite con AH nativo.
+- **No** reinventar hit-strips full-width *siempre* visibles (pintan bordes fantasma).
 
 ## Comandos
 

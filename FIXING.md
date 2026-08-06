@@ -215,15 +215,21 @@ Tray icon = UI. Cerrar la ventana **no** mata el proceso (solo oculta). Salir de
 ### Exit left taskbar clipped
 - **Cause:** `ResetTaskbar` only ran on the “real exit” OnClosing branch; `CloseMenuItem` set the flag *after* closing windows; `App.OnExit` did not restore. Log showed `UI hidden` + `App.OnExit` without `Exiting RoundedTB`.
 - **Fix:** `RestoreAllTaskbars(reason)` (idempotent); flag set **before** Close; restore from OnClosing, `App.OnExit`, `SessionEnding`, and terminating unhandled exceptions.
+- **Follow-up (Task Manager):** End task often cancels WPF close (tray hide) then `TerminateProcess` — no managed cleanup. **`TaskbarWatchdog`** (`RoundedTB.exe --watchdog <pid>`) waits on the main process and clears `SetWindowRgn`/layered flags from `%LocalAppData%\rtb.watchdog.json` HWNDs.
+
+### Close UI exited the whole process (no tray)
+- **Cause:** WPF-UI `TitleBar ApplicationNavigation="True"` maps to app-level shutdown (`Application.Shutdown`) on the close button — bypasses “cancel close → hide”. `ShowMenuItem` also called `Close()` on MainWindow. Default `ShutdownMode` can exit when the last window goes away.
+- **Fix:** `ApplicationNavigation="False"`, `MinimizeToTray="True"`, `ShutdownMode=OnExplicitShutdown`, OnClosing hide path uses `Hide()`, Show menu only closes accessory windows, real Exit calls `Shutdown()` after restore.
 
 ### Dynamic “stops ~10 apps”
 - **Cause:** Not a hard limit. When AppList approached/overlapped tray, `CheckDynamicUpdateIsValid` rejected updates → pill froze. Tiny positive gap + any tray also forced simple.
 - **Fix:** `Taskbar.ClampAppListAwayFromTray`; force-simple only when `ShowTray` and gap is tiny; fallback still applies dynamic when validation is strict.
 
-### Windows native autohide hover broken while RTB running
-- **Cause:** With Windows ABS_AUTOHIDE, only a thin edge stays on-screen. `SetWindowRgn` (centred pill + margin top) removes hit-tests from that strip → hover does nothing; Start still forces show.
-- **Fix v1:** Reset RGN while slid away (hover worked, but **flashed** full unrounded bar on reveal).
-- **Fix v2:** Keep rounded RGN always; `OrNativeAutohideHitStrip` ORs a full-edge ~4px strip into simple/dynamic regions so peek hover works without clearing the clip.
-- **Fix v3 (flicker):** `ShowSegmentsOnHover` only sets `Ignored` on hover *transitions* (was forcing `SetWindowRgn` every 100ms because `Clone()` reset ShowTray). Stable hit-strip always on when native AH. Fast-poll ~16ms while the bar is sliding.
-- **Fix v4 (hairline past corners):** Always-on hit-strip painted a full-width band through dynamic gaps / past round rects. Strip is **peek-only** again; keep v3 transition + fast-poll for flicker.
-- **Fix v5 (align upstream torchgm #36):** Removed hit-strip entirely. While Windows native AH is peeking/sliding, **freeze** RTB `SetWindowRgn` and reapply when stable. UI recommends RTB Always hide instead of Windows autohide.
+### Maximised window makes taskbar “full” / dynamic looks off
+- **Cause:** `FillOnMaximise: true` (former default) calls `ResetTaskbar` whenever any maximised window shares the monitor — intentional “restore stock bar”, not a dynamic bug.
+- **Fix:** Default `FillOnMaximise`/`FillOnTaskSwitch` to **false**; checkbox label clarifies it fills/disables dynamic rounding. Uncheck in UI if an old `rtb.json` still has it true.
+
+### Windows native autohide hover broken / bar won’t hide while RTB running
+- **Cause:** With Windows ABS_AUTOHIDE, only a thin edge stays on-screen. `SetWindowRgn` (centred pill + margin top) removes hit-tests from that strip → hover does nothing. Freezing without updating `TaskbarRect` left `rectMoved` stuck and kept a rounded RGN during slide so Explorer could not cleanly hide. Explorer also rewrites regions while sliding (torchgm #36).
+- **Fix v1–v5:** See prior notes (hit-strip variants → freeze-only).
+- **Fix v6:** Peek → `ApplyNativeAutohidePeekHitRegion`. Slide → `ResetTaskbar` once + freeze + **always update** stored rects. Stable shown → rounded. Skip RTB opacity AutoHide and FillOnMaximise while native AH is on. Some flicker can remain (Explorer limitation).

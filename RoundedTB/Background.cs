@@ -216,13 +216,14 @@ namespace RoundedTB
                             taskbars[current].AppListHwnd,
                             taskbars[current].AppListXaml);
 
-                        // Windows native autohide (torchgm #36): Explorer also sets regions while sliding.
-                        // Do not apply SetWindowRgn during peek/slide — freeze, then reapply when stable.
-                        // Prefer RoundedTB "Always hide" over Windows Settings autohide.
+                        // Windows native autohide (torchgm #36): Explorer sets regions while sliding.
+                        // Peek: thin edge strip for hover. Slide: clear RTB RGN + freeze + keep TaskbarRect fresh.
+                        // Stale TaskbarRect during freeze made rectMoved stick forever and blocked hide/reapply.
+                        // Leave RTB AutoHide off when using Windows Settings autohide.
                         bool nativeAutoHide = Taskbar.IsWindowsTaskbarAutoHideEnabled(taskbars[current].TaskbarHwnd);
                         if (nativeAutoHide && !loggedNativeAutoHideCompat)
                         {
-                            mw.interaction.AddLog("Windows native autohide detected - freezing RGN during peek/slide (use RTB Always hide for best results; see torchgm #36)");
+                            mw.interaction.AddLog("Windows native autohide detected - peek hit-strip + clear/freeze on slide (RTB AutoHide off recommended; torchgm #36)");
                             loggedNativeAutoHideCompat = true;
                         }
 
@@ -233,26 +234,44 @@ namespace RoundedTB
                             || newTaskbar.TaskbarRect.Left != prevTbRect.Left
                             || newTaskbar.TaskbarRect.Right != prevTbRect.Right;
                         bool peek = nativeAutoHide && Taskbar.IsTaskbarEdgeRevealOnly(taskbars[current].TaskbarHwnd);
-                        bool freezeNativeAh = nativeAutoHide && (peek || rectMoved);
 
-                        if (freezeNativeAh)
+                        if (peek)
                         {
+                            Taskbar.ApplyNativeAutohidePeekHitRegion(taskbars[current].TaskbarHwnd);
+                            taskbars[current].TaskbarRect = newTaskbar.TaskbarRect;
+                            taskbars[current].AppListRect = newTaskbar.AppListRect;
+                            taskbars[current].TrayRect = newTaskbar.TrayRect;
                             taskbars[current].NativeAhFrozen = true;
-                            if (rectMoved || peek)
-                            {
-                                fastPollRemaining = 25;
-                            }
-                            // Skip Fill/Update SetWindowRgn this tick — leave Explorer alone during slide.
+                            taskbars[current].NativeAhCleared = true;
+                            fastPollRemaining = 25;
                             continue;
                         }
 
-                        if (taskbars[current].NativeAhFrozen)
+                        if (nativeAutoHide && rectMoved)
+                        {
+                            // Clear our rounded RGN so Explorer can slide/hide without fighting SetWindowRgn.
+                            if (!taskbars[current].NativeAhCleared)
+                            {
+                                Taskbar.ResetTaskbar(taskbars[current], settings);
+                                taskbars[current].NativeAhCleared = true;
+                            }
+                            taskbars[current].TaskbarRect = newTaskbar.TaskbarRect;
+                            taskbars[current].AppListRect = newTaskbar.AppListRect;
+                            taskbars[current].TrayRect = newTaskbar.TrayRect;
+                            taskbars[current].NativeAhFrozen = true;
+                            fastPollRemaining = 25;
+                            continue;
+                        }
+
+                        if (taskbars[current].NativeAhFrozen || taskbars[current].NativeAhCleared)
                         {
                             taskbars[current].NativeAhFrozen = false;
+                            taskbars[current].NativeAhCleared = false;
                             taskbars[current].Ignored = true; // force one clean reapply when stable
                         }
 
-                        if (Taskbar.TaskbarShouldBeFilled(taskbars[current].TaskbarHwnd, settings))
+                        // Fill-on-maximise fights native AH and intentionally undoes dynamic rounding.
+                        if (!nativeAutoHide && Taskbar.TaskbarShouldBeFilled(taskbars[current].TaskbarHwnd, settings))
                         {
                             if (taskbars[current].Ignored == false)
                             {
@@ -288,7 +307,7 @@ namespace RoundedTB
                             }
                         }
 
-                        if (settings.AutoHide > 0)
+                        if (settings.AutoHide > 0 && !nativeAutoHide)
                         {
                             LocalPInvoke.RECT currentTaskbarRect = taskbars[current].TaskbarRect;
                             LocalPInvoke.GetCursorPos(out LocalPInvoke.POINT msPt);
