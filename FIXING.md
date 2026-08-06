@@ -6,7 +6,7 @@
 **Base upstream:** [Gniang/RoundedTB](https://github.com/Gniang/RoundedTB) @ `b78e5d6`  
 **Objetivo del fork local:** que RoundedTB sea usable en Win11 actual (dynamic mode, estabilidad, net8) sin reescribir el modelo de clipping.
 
-**Estado (2026-08-06):** Release usable en Win11 — dynamic + segments-on-hover, restore al salir, logging/crash handlers, fade RTB rápido, freeze de RGN con autohide nativo (recomendado: RTB Always hide o Windows AH off). Validado en uso real.
+**Estado (2026-08-06):** Código de tray-close + AH nativo v6 + FillOnMaximise default off + watchdog está en rama `cursor/tray-autohide-fillmax-ac69` / [PR #1](https://github.com/Raikadier/RoundedTB/pull/1). **Falta validación en Windows local** — ver [`HANDOFF.md`](HANDOFF.md). Cloud Linux no puede ejecutar el exe WPF.
 
 ---
 
