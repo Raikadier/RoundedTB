@@ -3,11 +3,21 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
+using System.Threading;
 using System.Windows;
-using System.Windows.Threading;
 
 namespace RoundedTB
 {
+    /// <summary>
+    /// Opacity steps for non-blocking taskbar fade (one step per worker tick).
+    /// Keep short — with ~16ms fast-poll during fade this is ~30–50ms total.
+    /// </summary>
+    internal static class FadeSteps
+    {
+        internal static readonly byte[] FadeIn = { 140, 255 };
+        internal static readonly byte[] FadeOut = { 100, 1 };
+    }
+
     public class Background
     {
         private struct ReloadChecker
@@ -15,18 +25,80 @@ namespace RoundedTB
             public bool IsReload { get; set; }
         }
 
-        // Just have a reference point for the Dispatcher
         public MainWindow mw;
         bool redrawOverride = false;
         int infrequentCount = 0;
+        int heartbeatCount = 0;
+        bool loggedNativeAutoHideCompat = false;
+        int fastPollRemaining = 0;
 
         public Background()
         {
             mw = (MainWindow)Application.Current.MainWindow;
         }
 
+        private static void ClearTransparent(IntPtr hwnd)
+        {
+            int style = LocalPInvoke.GetWindowLong(hwnd, LocalPInvoke.GWL_EXSTYLE).ToInt32();
+            if ((style & LocalPInvoke.WS_EX_TRANSPARENT) == LocalPInvoke.WS_EX_TRANSPARENT)
+            {
+                LocalPInvoke.SetWindowLong(hwnd, LocalPInvoke.GWL_EXSTYLE, style ^ LocalPInvoke.WS_EX_TRANSPARENT);
+            }
+        }
 
-        // Main method for the BackgroundWorker - runs indefinitely
+        private static void SetTransparent(IntPtr hwnd)
+        {
+            int style = LocalPInvoke.GetWindowLong(hwnd, LocalPInvoke.GWL_EXSTYLE).ToInt32();
+            if ((style & LocalPInvoke.WS_EX_TRANSPARENT) != LocalPInvoke.WS_EX_TRANSPARENT)
+            {
+                LocalPInvoke.SetWindowLong(hwnd, LocalPInvoke.GWL_EXSTYLE, style ^ LocalPInvoke.WS_EX_TRANSPARENT);
+            }
+        }
+
+        /// <summary>
+        /// Advances one fade step per call (no Thread.Sleep) so the worker keeps polling.
+        /// </summary>
+        private static void TickFadeAnimation(Types.Taskbar tb)
+        {
+            if (tb.FadeAnimDir == 1)
+            {
+                if (tb.FadeAnimStep == 0)
+                {
+                    ClearTransparent(tb.TaskbarHwnd);
+                }
+                if (tb.FadeAnimStep >= 0 && tb.FadeAnimStep < FadeSteps.FadeIn.Length)
+                {
+                    LocalPInvoke.SetLayeredWindowAttributes(tb.TaskbarHwnd, 0, FadeSteps.FadeIn[tb.FadeAnimStep], LocalPInvoke.LWA_ALPHA);
+                    tb.FadeAnimStep++;
+                }
+                if (tb.FadeAnimStep >= FadeSteps.FadeIn.Length)
+                {
+                    tb.FadeAnimDir = 0;
+                    tb.FadeAnimStep = 0;
+                    tb.TaskbarHidden = false;
+                    tb.Ignored = true;
+                    Debug.WriteLine("MouseOver TB");
+                }
+            }
+            else if (tb.FadeAnimDir == -1)
+            {
+                if (tb.FadeAnimStep >= 0 && tb.FadeAnimStep < FadeSteps.FadeOut.Length)
+                {
+                    LocalPInvoke.SetLayeredWindowAttributes(tb.TaskbarHwnd, 0, FadeSteps.FadeOut[tb.FadeAnimStep], LocalPInvoke.LWA_ALPHA);
+                    tb.FadeAnimStep++;
+                }
+                if (tb.FadeAnimStep >= FadeSteps.FadeOut.Length)
+                {
+                    SetTransparent(tb.TaskbarHwnd);
+                    tb.FadeAnimDir = 0;
+                    tb.FadeAnimStep = 0;
+                    tb.TaskbarHidden = true;
+                    tb.Ignored = true;
+                    Debug.WriteLine("MouseOff TB");
+                }
+            }
+        }
+
         public void DoWork(object sender, DoWorkEventArgs e)
         {
             mw.interaction.AddLog("in bw");
@@ -42,261 +114,341 @@ namespace RoundedTB
                         break;
                     }
 
-                    // Primary loop for the running process
-                    else
+                    infrequentCount++;
+                    if (infrequentCount == 10)
                     {
-                        // Section for running less important things without requiring an additional thread
-                        infrequentCount++;
-                        if (infrequentCount == 10)
+                        List<IntPtr> windowList = Interaction.GetTopLevelWindows();
+                        foreach (IntPtr hwnd in windowList)
                         {
-                            // Check to see if settings need to be shown
-                            List<IntPtr> windowList = Interaction.GetTopLevelWindows();
-                            foreach (IntPtr hwnd in windowList)
+                            StringBuilder windowClass = new StringBuilder(1024);
+                            StringBuilder windowTitle = new StringBuilder(1024);
+                            try
                             {
-                                StringBuilder windowClass = new StringBuilder(1024);
-                                StringBuilder windowTitle = new StringBuilder(1024);
-                                try
-                                {
-                                    LocalPInvoke.GetClassName(hwnd, windowClass, 1024);
-                                    LocalPInvoke.GetWindowText(hwnd, windowTitle, 1024);
+                                LocalPInvoke.GetClassName(hwnd, windowClass, 1024);
+                                LocalPInvoke.GetWindowText(hwnd, windowTitle, 1024);
 
-                                    if (windowClass.ToString().Contains("HwndWrapper[RoundedTB.exe") && windowTitle.ToString() == "RoundedTB_SettingsRequest")
+                                if (windowClass.ToString().Contains("HwndWrapper[RoundedTB.exe") && windowTitle.ToString() == "RoundedTB_SettingsRequest")
+                                {
+                                    mw.Dispatcher.Invoke(() =>
                                     {
-                                        mw.Dispatcher.Invoke(() =>
+                                        if (mw.Visibility != Visibility.Visible)
                                         {
-                                            if (mw.Visibility != Visibility.Visible)
-                                            {
-                                                mw.ShowMenuItem_Click(null, null);
-                                            }
-                                        });
-                                        LocalPInvoke.SetWindowText(hwnd, "RoundedTB");
-                                    }
+                                            mw.ShowMenuItem_Click(null, null);
+                                        }
+                                    });
+                                    LocalPInvoke.SetWindowText(hwnd, "RoundedTB");
                                 }
-                                catch (Exception) { }
                             }
-
-                            ReloadChecker checker = new();
-                            mw.taskbarDetails?.ForEach(taskbar =>
+                            catch (Exception ex)
                             {
-                                if (taskbar.AppListXaml.ReloadRequired)
-                                {
-                                    taskbar.AppListXaml.ReloadTaskbarFrameElement();
-                                    checker.IsReload = true;
-                                }
-                            });
-                            // Update tray icon
-                            mw.interaction.RefreshUiTray(isForceReset: checker.IsReload);
-
-                            infrequentCount = 0;
+                                Debug.WriteLine($"Error checking window: {ex.Message}");
+                            }
                         }
 
-                        // Check if the taskbar is centred, and if it is, directly update the settings; using an interim bool to avoid delaying because I'm lazy
-                        bool isCentred = Taskbar.CheckIfCentred();
+                        ReloadChecker checker = new();
+                        List<Types.Taskbar> infrequentBars;
+                        lock (mw.DataLock)
+                        {
+                            infrequentBars = mw.taskbarDetails;
+                        }
+                        infrequentBars?.ForEach(taskbar =>
+                        {
+                            if (taskbar.AppListXaml != null && taskbar.AppListXaml.ReloadRequired)
+                            {
+                                taskbar.AppListXaml.ReloadTaskbarFrameElement();
+                                checker.IsReload = true;
+                            }
+                        });
+                        mw.interaction.RefreshUiTray(isForceReset: checker.IsReload);
+                        infrequentCount = 0;
+                    }
+
+                    bool isCentred = Taskbar.CheckIfCentred();
+                    List<Types.Taskbar> taskbars;
+                    Types.Settings settings;
+                    lock (mw.DataLock)
+                    {
                         mw.activeSettings.IsCentred = isCentred;
+                        taskbars = mw.taskbarDetails;
+                        settings = mw.activeSettings.Clone();
+                    }
 
-                        // Work with static values to avoid some null reference exceptions
-                        List<Types.Taskbar> taskbars = mw.taskbarDetails;
-                        Types.Settings settings = mw.activeSettings;
+                    if (taskbars == null || taskbars.Count == 0)
+                    {
+                        Thread.Sleep(100);
+                        continue;
+                    }
 
-                        // If the number of taskbars has changed, regenerate taskbar information
-                        if (Taskbar.TaskbarCountOrHandleChanged(taskbars.Count, taskbars[0].TaskbarHwnd))
+                    if (Taskbar.TaskbarCountOrHandleChanged(taskbars.Count, taskbars[0].TaskbarHwnd))
+                    {
+                        List<Types.Taskbar> regenerated = Taskbar.GenerateTaskbarInfo(mw.interaction.IsWindows11());
+                        lock (mw.DataLock)
                         {
-                            // Forcefully reset taskbars if the taskbar count or main taskbar handle has changed
                             taskbars.ForEach(t => t.Dispose());
-                            taskbars = Taskbar.GenerateTaskbarInfo(mw.interaction.IsWindows11());
-                            mw.interaction.RefreshUiTray(isForceReset: true);
-                            Debug.WriteLine("Regenerating taskbar info");
+                            mw.taskbarDetails = regenerated;
+                            taskbars = regenerated;
                         }
+                        mw.interaction.RefreshUiTray(isForceReset: true);
+                        mw.interaction.AddLog("Regenerating taskbar info (count/handle changed)");
+                        Debug.WriteLine("Regenerating taskbar info");
+                    }
 
-                        for (int current = 0; current < taskbars.Count; current++)
+                    for (int current = 0; current < taskbars.Count; current++)
+                    {
+                        if (taskbars[current].TaskbarHwnd == IntPtr.Zero || taskbars[current].AppListHwnd == IntPtr.Zero)
                         {
-                            if (taskbars[current].TaskbarHwnd == IntPtr.Zero || taskbars[current].AppListHwnd == IntPtr.Zero)
+                            List<Types.Taskbar> regenerated = Taskbar.GenerateTaskbarInfo(mw.interaction.IsWindows11());
+                            lock (mw.DataLock)
                             {
                                 taskbars.ForEach(t => t.Dispose());
-                                taskbars = Taskbar.GenerateTaskbarInfo(mw.interaction.IsWindows11());
-                                mw.interaction.RefreshUiTray(isForceReset: true);
-                                Debug.WriteLine("Regenerating taskbar info due to a missing handle");
-                                break;
+                                mw.taskbarDetails = regenerated;
+                                taskbars = regenerated;
                             }
-                            // Get the latest quick details of this taskbar
-                            Types.Taskbar newTaskbar = Taskbar.GetQuickTaskbarRects(taskbars[current].TaskbarHwnd, taskbars[current].TrayHwnd, taskbars[current].AppListHwnd, taskbars[current].AppListXaml);
+                            mw.interaction.RefreshUiTray(isForceReset: true);
+                            mw.interaction.AddLog("Regenerating taskbar info (missing handle)");
+                            Debug.WriteLine("Regenerating taskbar info due to a missing handle");
+                            break;
+                        }
 
+                        Types.Taskbar newTaskbar = Taskbar.GetQuickTaskbarRects(
+                            taskbars[current].TaskbarHwnd,
+                            taskbars[current].TrayHwnd,
+                            taskbars[current].AppListHwnd,
+                            taskbars[current].AppListXaml);
 
-                            // If the taskbar's monitor has a maximised window, reset it so it's "filled"
-                            if (Taskbar.TaskbarShouldBeFilled(taskbars[current].TaskbarHwnd, settings))
+                        // Windows native autohide (torchgm #36): Explorer also sets regions while sliding.
+                        // Do not apply SetWindowRgn during peek/slide — freeze, then reapply when stable.
+                        // Prefer RoundedTB "Always hide" over Windows Settings autohide.
+                        bool nativeAutoHide = Taskbar.IsWindowsTaskbarAutoHideEnabled(taskbars[current].TaskbarHwnd);
+                        if (nativeAutoHide && !loggedNativeAutoHideCompat)
+                        {
+                            mw.interaction.AddLog("Windows native autohide detected - freezing RGN during peek/slide (use RTB Always hide for best results; see torchgm #36)");
+                            loggedNativeAutoHideCompat = true;
+                        }
+
+                        LocalPInvoke.RECT prevTbRect = taskbars[current].TaskbarRect;
+                        bool rectMoved =
+                            newTaskbar.TaskbarRect.Top != prevTbRect.Top
+                            || newTaskbar.TaskbarRect.Bottom != prevTbRect.Bottom
+                            || newTaskbar.TaskbarRect.Left != prevTbRect.Left
+                            || newTaskbar.TaskbarRect.Right != prevTbRect.Right;
+                        bool peek = nativeAutoHide && Taskbar.IsTaskbarEdgeRevealOnly(taskbars[current].TaskbarHwnd);
+                        bool freezeNativeAh = nativeAutoHide && (peek || rectMoved);
+
+                        if (freezeNativeAh)
+                        {
+                            taskbars[current].NativeAhFrozen = true;
+                            if (rectMoved || peek)
                             {
-                                if (taskbars[current].Ignored == false)
-                                {
-                                    Taskbar.ResetTaskbar(taskbars[current], settings);
-                                    taskbars[current].Ignored = true;
-                                }
-                                continue;
+                                fastPollRemaining = 25;
                             }
+                            // Skip Fill/Update SetWindowRgn this tick — leave Explorer alone during slide.
+                            continue;
+                        }
 
-                            // Showhide tray on hover
-                            if (settings.ShowSegmentsOnHover)
+                        if (taskbars[current].NativeAhFrozen)
+                        {
+                            taskbars[current].NativeAhFrozen = false;
+                            taskbars[current].Ignored = true; // force one clean reapply when stable
+                        }
+
+                        if (Taskbar.TaskbarShouldBeFilled(taskbars[current].TaskbarHwnd, settings))
+                        {
+                            if (taskbars[current].Ignored == false)
                             {
-                                LocalPInvoke.RECT currentTrayRect = taskbars[current].TrayRect;
-                                LocalPInvoke.RECT currentWidgetsRect = taskbars[current].TaskbarRect;
-                                currentWidgetsRect.Right = Convert.ToInt32(currentWidgetsRect.Right - (currentWidgetsRect.Right - currentWidgetsRect.Left) + (168 * taskbars[current].ScaleFactor));
-
-                                if (currentTrayRect.Left != 0)
-                                {
-                                    LocalPInvoke.GetCursorPos(out LocalPInvoke.POINT msPt);
-                                    bool isHoveringOverTray = LocalPInvoke.PtInRect(ref currentTrayRect, msPt);
-                                    bool isHoveringOverWidgets = LocalPInvoke.PtInRect(ref currentWidgetsRect, msPt);
-                                    if (isHoveringOverTray && !settings.ShowTray)
-                                    {
-                                        settings.ShowTray = true;
-                                        taskbars[current].Ignored = true;
-                                    }
-                                    else if (!isHoveringOverTray)
-                                    {
-                                        taskbars[current].Ignored = true;
-                                        settings.ShowTray = false;
-                                    }
-
-                                    if (isHoveringOverWidgets && !settings.ShowWidgets)
-                                    {
-                                        settings.ShowWidgets = true;
-                                        taskbars[current].Ignored = true;
-                                    }
-                                    else if (!isHoveringOverWidgets)
-                                    {
-                                        taskbars[current].Ignored = true;
-                                        settings.ShowWidgets = false;
-                                    }
-                                }
+                                Taskbar.ResetTaskbar(taskbars[current], settings);
+                                taskbars[current].Ignored = true;
                             }
+                            continue;
+                        }
 
-                            if (settings.AutoHide > 0)
+                        // Hover overrides on the snapshot only — never mutate UI-bound activeSettings.
+                        // Only force refresh on hover *transitions* (Clone() resets ShowTray each loop).
+                        if (settings.ShowSegmentsOnHover)
+                        {
+                            LocalPInvoke.RECT currentTrayRect = taskbars[current].TrayRect;
+                            LocalPInvoke.RECT currentWidgetsRect = taskbars[current].TaskbarRect;
+                            currentWidgetsRect.Right = Convert.ToInt32(
+                                currentWidgetsRect.Right - (currentWidgetsRect.Right - currentWidgetsRect.Left) + (168 * taskbars[current].ScaleFactor));
+
+                            if (currentTrayRect.Left != 0)
                             {
-                                LocalPInvoke.RECT currentTaskbarRect = taskbars[current].TaskbarRect;
                                 LocalPInvoke.GetCursorPos(out LocalPInvoke.POINT msPt);
-                                bool isHoveringOverTaskbar;
-                                if (taskbars[current].TaskbarHidden)
+                                bool isHoveringOverTray = LocalPInvoke.PtInRect(ref currentTrayRect, msPt);
+                                bool isHoveringOverWidgets = LocalPInvoke.PtInRect(ref currentWidgetsRect, msPt);
+                                settings.ShowTray = isHoveringOverTray;
+                                settings.ShowWidgets = isHoveringOverWidgets;
+                                if (isHoveringOverTray != taskbars[current].HoverShowTray
+                                    || isHoveringOverWidgets != taskbars[current].HoverShowWidgets)
                                 {
-                                    currentTaskbarRect.Top = currentTaskbarRect.Bottom - 2;
-                                    isHoveringOverTaskbar = LocalPInvoke.PtInRect(ref currentTaskbarRect, msPt);
+                                    taskbars[current].HoverShowTray = isHoveringOverTray;
+                                    taskbars[current].HoverShowWidgets = isHoveringOverWidgets;
+                                    taskbars[current].Ignored = true;
+                                }
+                            }
+                        }
 
-                                }
-                                else
+                        if (settings.AutoHide > 0)
+                        {
+                            LocalPInvoke.RECT currentTaskbarRect = taskbars[current].TaskbarRect;
+                            LocalPInvoke.GetCursorPos(out LocalPInvoke.POINT msPt);
+                            bool isHoveringOverTaskbar;
+                            if (taskbars[current].TaskbarHidden)
+                            {
+                                currentTaskbarRect.Top = currentTaskbarRect.Bottom - 2;
+                                isHoveringOverTaskbar = LocalPInvoke.PtInRect(ref currentTaskbarRect, msPt);
+                            }
+                            else
+                            {
+                                isHoveringOverTaskbar = LocalPInvoke.PtInRect(ref currentTaskbarRect, msPt);
+                            }
+
+                            LocalPInvoke.GetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, out _, out byte taskbarOpacity, out _);
+
+                            if (taskbars[current].FadeAnimDir == 0)
+                            {
+                                if (isHoveringOverTaskbar && (taskbars[current].TaskbarHidden || taskbarOpacity <= 1))
                                 {
-                                    isHoveringOverTaskbar = LocalPInvoke.PtInRect(ref currentTaskbarRect, msPt);
+                                    taskbars[current].FadeAnimDir = 1;
+                                    taskbars[current].FadeAnimStep = 0;
                                 }
-                                if (isHoveringOverTaskbar)
+                                else if (!isHoveringOverTaskbar && !taskbars[current].TaskbarHidden && taskbarOpacity >= 255)
                                 {
-                                    Debug.WriteLine("___");
+                                    taskbars[current].FadeAnimDir = -1;
+                                    taskbars[current].FadeAnimStep = 0;
                                 }
-                                int animSpeed = 15;
-                                byte taskbarOpacity = 0;
-                                LocalPInvoke.GetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, out _, out taskbarOpacity, out _);
-                                //Debug.WriteLine($"Taskbar opacity:  {taskbarOpacity}");
-                                if (isHoveringOverTaskbar && taskbarOpacity == 1)
+                            }
+                            else if (taskbars[current].FadeAnimDir == 1 && !isHoveringOverTaskbar)
+                            {
+                                // Reverse toward hide mid-animation.
+                                taskbars[current].FadeAnimDir = -1;
+                                taskbars[current].FadeAnimStep = 0;
+                            }
+                            else if (taskbars[current].FadeAnimDir == -1 && isHoveringOverTaskbar)
+                            {
+                                taskbars[current].FadeAnimDir = 1;
+                                taskbars[current].FadeAnimStep = 0;
+                            }
+
+                            TickFadeAnimation(taskbars[current]);
+                            if (taskbars[current].FadeAnimDir != 0)
+                            {
+                                fastPollRemaining = Math.Max(fastPollRemaining, 8);
+                            }
+                        }
+                        else
+                        {
+                            LocalPInvoke.GetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, out _, out byte taskbarOpacity, out _);
+                            if (taskbarOpacity < 255 || taskbars[current].TaskbarHidden)
+                            {
+                                if (taskbars[current].FadeAnimDir != 1)
                                 {
-                                    int style = LocalPInvoke.GetWindowLong(taskbars[current].TaskbarHwnd, LocalPInvoke.GWL_EXSTYLE).ToInt32();
-                                    if ((style & LocalPInvoke.WS_EX_TRANSPARENT) == LocalPInvoke.WS_EX_TRANSPARENT)
-                                    {
-                                        LocalPInvoke.SetWindowLong(taskbars[current].TaskbarHwnd, LocalPInvoke.GWL_EXSTYLE, LocalPInvoke.GetWindowLong(taskbars[current].TaskbarHwnd, LocalPInvoke.GWL_EXSTYLE).ToInt32() ^ LocalPInvoke.WS_EX_TRANSPARENT);
-                                    }
-                                    LocalPInvoke.SetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, 0, 63, LocalPInvoke.LWA_ALPHA);
-                                    System.Threading.Thread.Sleep(animSpeed);
-                                    LocalPInvoke.SetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, 0, 127, LocalPInvoke.LWA_ALPHA);
-                                    System.Threading.Thread.Sleep(animSpeed);
-                                    LocalPInvoke.SetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, 0, 191, LocalPInvoke.LWA_ALPHA);
-                                    System.Threading.Thread.Sleep(animSpeed);
-                                    LocalPInvoke.SetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, 0, 255, LocalPInvoke.LWA_ALPHA);
-                                    taskbars[current].Ignored = true;
-                                    taskbars[current].TaskbarHidden = false;
-                                    Debug.WriteLine("MouseOver TB");
+                                    taskbars[current].FadeAnimDir = 1;
+                                    taskbars[current].FadeAnimStep = 0;
                                 }
-                                else if (!isHoveringOverTaskbar && taskbarOpacity == 255)
+                                TickFadeAnimation(taskbars[current]);
+                                if (taskbars[current].FadeAnimDir != 0)
                                 {
-                                    LocalPInvoke.SetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, 0, 191, LocalPInvoke.LWA_ALPHA);
-                                    System.Threading.Thread.Sleep(animSpeed);
-                                    LocalPInvoke.SetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, 0, 127, LocalPInvoke.LWA_ALPHA);
-                                    System.Threading.Thread.Sleep(animSpeed);
-                                    LocalPInvoke.SetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, 0, 63, LocalPInvoke.LWA_ALPHA);
-                                    System.Threading.Thread.Sleep(animSpeed);
-                                    LocalPInvoke.SetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, 0, 1, LocalPInvoke.LWA_ALPHA);
-                                    int style = LocalPInvoke.GetWindowLong(taskbars[current].TaskbarHwnd, LocalPInvoke.GWL_EXSTYLE).ToInt32();
-                                    if ((style & LocalPInvoke.WS_EX_TRANSPARENT) != LocalPInvoke.WS_EX_TRANSPARENT)
-                                    {
-                                        LocalPInvoke.SetWindowLong(taskbars[current].TaskbarHwnd, LocalPInvoke.GWL_EXSTYLE, LocalPInvoke.GetWindowLong(taskbars[current].TaskbarHwnd, LocalPInvoke.GWL_EXSTYLE).ToInt32() ^ LocalPInvoke.WS_EX_TRANSPARENT);
-                                    }
-                                    taskbars[current].Ignored = true;
-                                    taskbars[current].TaskbarHidden = true;
-                                    Debug.WriteLine("MouseOff TB");
+                                    fastPollRemaining = Math.Max(fastPollRemaining, 8);
                                 }
                             }
                             else
                             {
-                                int animSpeed = 15;
-                                byte taskbarOpacity = 0;
-                                LocalPInvoke.GetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, out _, out taskbarOpacity, out _);
-                                if (taskbarOpacity < 255)
-                                {
-                                    int style = LocalPInvoke.GetWindowLong(taskbars[current].TaskbarHwnd, LocalPInvoke.GWL_EXSTYLE).ToInt32();
-                                    if ((style & LocalPInvoke.WS_EX_TRANSPARENT) == LocalPInvoke.WS_EX_TRANSPARENT)
-                                    {
-                                        LocalPInvoke.SetWindowLong(taskbars[current].TaskbarHwnd, LocalPInvoke.GWL_EXSTYLE, LocalPInvoke.GetWindowLong(taskbars[current].TaskbarHwnd, LocalPInvoke.GWL_EXSTYLE).ToInt32() ^ LocalPInvoke.WS_EX_TRANSPARENT);
-                                    }
-                                    LocalPInvoke.SetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, 0, 63, LocalPInvoke.LWA_ALPHA);
-                                    System.Threading.Thread.Sleep(animSpeed);
-                                    LocalPInvoke.SetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, 0, 127, LocalPInvoke.LWA_ALPHA);
-                                    System.Threading.Thread.Sleep(animSpeed);
-                                    LocalPInvoke.SetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, 0, 191, LocalPInvoke.LWA_ALPHA);
-                                    System.Threading.Thread.Sleep(animSpeed);
-                                    LocalPInvoke.SetLayeredWindowAttributes(taskbars[current].TaskbarHwnd, 0, 255, LocalPInvoke.LWA_ALPHA);
-                                    taskbars[current].Ignored = true;
-                                    taskbars[current].TaskbarHidden = false;
-                                }
+                                taskbars[current].FadeAnimDir = 0;
+                                taskbars[current].FadeAnimStep = 0;
+                            }
+                        }
+
+                        if (Taskbar.TaskbarRefreshRequired(taskbars[current], newTaskbar, settings.IsDynamic) || taskbars[current].Ignored || redrawOverride)
+                        {
+                            Debug.WriteLine($"Refresh required on taskbar {current}");
+                            taskbars[current].Ignored = false;
+
+                            Types.Taskbar measured = newTaskbar;
+                            if (settings.IsDynamic)
+                            {
+                                measured = Taskbar.ClampAppListAwayFromTray(newTaskbar, taskbars[current].ScaleFactor);
                             }
 
+                            int isFullTest = measured.TrayRect.Left - measured.AppListRect.Right;
+                            Debug.WriteLine($"Taskbar: {current} - AppList ends: {measured.AppListRect.Right} - Tray starts: {measured.TrayRect.Left} - Total gap: {isFullTest}");
 
-                            // If the taskbar's overall rect has changed, update it. If it's simple, just update. If it's dynamic, check it's a valid change, then update it.
-                            if (Taskbar.TaskbarRefreshRequired(taskbars[current], newTaskbar, settings.IsDynamic) || taskbars[current].Ignored || redrawOverride)
+                            // Force simple only when tray segment is shown and the gap is tiny (merged full bar).
+                            // When tray is hidden (or hover-only), keep dynamic with clamped width so the pill keeps growing.
+                            bool forceSimpleNearTray = settings.ShowTray
+                                && measured.TrayRect.Left != 0
+                                && isFullTest <= taskbars[current].ScaleFactor * 25
+                                && isFullTest > 0;
+
+                            if (!settings.IsDynamic || forceSimpleNearTray)
                             {
-                                Debug.WriteLine($"Refresh required on taskbar {current}");
-                                taskbars[current].Ignored = false;
-                                int isFullTest = newTaskbar.TrayRect.Left - newTaskbar.AppListRect.Right;
-                                mw.interaction.AddLog($"Taskbar: {current} - AppList ends: {newTaskbar.AppListRect.Right} - Tray starts: {newTaskbar.TrayRect.Left} - Total gap: {isFullTest}");
-                                if (!settings.IsDynamic || (isFullTest <= taskbars[current].ScaleFactor * 25 && isFullTest > 0 && newTaskbar.TrayRect.Left != 0))
+                                taskbars[current].TaskbarRect = newTaskbar.TaskbarRect;
+                                taskbars[current].AppListRect = newTaskbar.AppListRect;
+                                taskbars[current].TrayRect = newTaskbar.TrayRect;
+                                Taskbar.UpdateSimpleTaskbar(taskbars[current], settings);
+                            }
+                            else if (Taskbar.CheckDynamicUpdateIsValid(taskbars[current], measured))
+                            {
+                                taskbars[current].TaskbarRect = measured.TaskbarRect;
+                                taskbars[current].AppListRect = measured.AppListRect;
+                                taskbars[current].TrayRect = measured.TrayRect;
+                                Taskbar.UpdateDynamicTaskbar(taskbars[current], settings);
+                            }
+                            else
+                            {
+                                // Avoid freezing the last valid region when validation is overly strict.
+                                int w = measured.AppListRect.Right - measured.AppListRect.Left;
+                                if (w > 20 * taskbars[current].ScaleFactor)
                                 {
-                                    // Add the rect changes to the temporary list of taskbars
-                                    taskbars[current].TaskbarRect = newTaskbar.TaskbarRect;
-                                    taskbars[current].AppListRect = newTaskbar.AppListRect;
-                                    taskbars[current].TrayRect = newTaskbar.TrayRect;
-                                    Taskbar.UpdateSimpleTaskbar(taskbars[current], settings);
-                                    mw.interaction.AddLog($"Updated taskbar {current} simply");
-                                }
-                                else
-                                {
-                                    if (Taskbar.CheckDynamicUpdateIsValid(taskbars[current], newTaskbar))
-                                    {
-                                        // Add the rect changes to the temporary list of taskbars
-                                        taskbars[current].TaskbarRect = newTaskbar.TaskbarRect;
-                                        taskbars[current].AppListRect = newTaskbar.AppListRect;
-                                        taskbars[current].TrayRect = newTaskbar.TrayRect;
-                                        Taskbar.UpdateDynamicTaskbar(taskbars[current], settings);
-                                        mw.interaction.AddLog($"Updated taskbar {current} dynamically");
-                                    }
+                                    taskbars[current].TaskbarRect = measured.TaskbarRect;
+                                    taskbars[current].AppListRect = measured.AppListRect;
+                                    taskbars[current].TrayRect = measured.TrayRect;
+                                    Taskbar.UpdateDynamicTaskbar(taskbars[current], settings);
                                 }
                             }
                         }
+
+                        // During Windows autohide settle, poll faster so we reapply soon after freeze ends.
+                        if (nativeAutoHide && (rectMoved || peek || taskbars[current].Ignored))
+                        {
+                            fastPollRemaining = 25;
+                        }
+                    }
+
+                    lock (mw.DataLock)
+                    {
                         mw.taskbarDetails = taskbars;
+                    }
 
+                    heartbeatCount++;
+                    if (heartbeatCount >= 600) // ~60s at 100ms sleep — daily use, not spam
+                    {
+                        mw.interaction.AddLog($"bw heartbeat bars={taskbars.Count} dyn={settings.IsDynamic} hoverSeg={settings.ShowSegmentsOnHover} fillMax={settings.FillOnMaximise}");
+                        heartbeatCount = 0;
+                    }
 
-                        System.Threading.Thread.Sleep(100);
+                    if (fastPollRemaining > 0)
+                    {
+                        fastPollRemaining--;
+                        Thread.Sleep(16);
+                    }
+                    else
+                    {
+                        Thread.Sleep(100);
                     }
                 }
-                catch (TypeInitializationException ex)
+                catch (Exception ex)
                 {
-                    mw.interaction.AddLog(ex.Message);
-                    mw.interaction.AddLog(ex.InnerException.Message);
-                    throw ex;
+                    mw.interaction.AddLog($"bw exception ({ex.GetType().Name}): {ex}");
+                    if (ex is TypeInitializationException tip && tip.InnerException != null)
+                    {
+                        mw.interaction.AddLog($"bw TypeInit inner: {tip.InnerException}");
+                    }
+                    // Stay alive — previous code rethrew TypeInitializationException and killed the worker.
+                    Thread.Sleep(500);
                 }
             }
+            mw.interaction.AddLog("bw loop exited");
         }
     }
 }

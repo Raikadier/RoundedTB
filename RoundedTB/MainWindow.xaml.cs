@@ -1,4 +1,3 @@
-﻿using IWshRuntimeLibrary;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -36,6 +35,8 @@ namespace RoundedTB
     {
         public bool isWindows11;
         public List<Types.Taskbar> taskbarDetails = new List<Types.Taskbar>();
+        /// <summary>Guards taskbarDetails / activeSettings shared with BackgroundWorker.</summary>
+        public readonly object DataLock = new object();
         public bool shouldReallyDieNoReally = false;
         public string configPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "rtb.json");
         public string logPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "rtb.log");
@@ -47,6 +48,9 @@ namespace RoundedTB
         public bool isCentred = false;
         public bool isAlreadyRunning = false;
         public Background background;
+        /// <summary>True while RoundedTB's own AutoHide (opacity/work-area) is engaged — not Windows native autohide.</summary>
+        bool rtbAutoHideEngaged = false;
+        bool taskbarsRestoredOnExit = false;
         public Interaction interaction;
         private HwndSource source;
         public int selectedSegment = 0; // 0 = Simple, 1 = AppList, 2 = Tray, 3 = Widgets
@@ -168,6 +172,7 @@ namespace RoundedTB
             taskbarThread.WorkerSupportsCancellation = true;
             taskbarThread.WorkerReportsProgress = true;
             taskbarThread.DoWork += background.DoWork;
+            taskbarThread.RunWorkerCompleted += TaskbarThread_RunWorkerCompleted;
 
             // Load settings into memory/UI
             interaction.FileSystem();
@@ -373,7 +378,7 @@ namespace RoundedTB
                 ShowMenuItem.Header = "Hide RoundedTB";
             }
 
-            AutoHide(true, taskbarDetails);
+            AutoHide(activeSettings.AutoHide > 0, taskbarDetails);
 
             UpdateUi();
 
@@ -418,18 +423,21 @@ namespace RoundedTB
 
         public void AutoHide(bool enabled, List<Types.Taskbar> taskbarDetails)
         {
-            int workingHeight = System.Windows.Forms.Screen.PrimaryScreen.WorkingArea.Height;
-            int boundsHeight = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height;
-            int taskbarHeight = taskbarDetails[0].TaskbarRect.Bottom - taskbarDetails[0].TaskbarRect.Top;
-            bool workAreaMisconfigured = false;
-
-            if (boundsHeight - taskbarHeight > workingHeight)
+            if (taskbarDetails == null || taskbarDetails.Count == 0)
             {
-                workAreaMisconfigured = true;
+                return;
             }
 
-            if (activeSettings.AutoHide > 0 && enabled)
+            // Only engage/disengage RoundedTB's fake autohide. Never toggle Windows AppBar AutoHide —
+            // that fights Settings → "Automatically hide the taskbar".
+            if (enabled)
             {
+                if (activeSettings.AutoHide <= 0)
+                {
+                    return;
+                }
+
+                interaction.AddLog("AutoHide engage (RoundedTB opacity/work-area; leaves Windows native autohide alone)");
                 MonitorStuff.DisplayInfoCollection Displays = MonitorStuff.GetDisplays();
 
                 foreach (MonitorStuff.DisplayInfo display in Displays)
@@ -443,28 +451,74 @@ namespace RoundedTB
                     LocalPInvoke.SetWindowPos(taskbar.TaskbarHwnd, new IntPtr(-1), 0, 0, 0, 0, LocalPInvoke.SetWindowPosFlags.IgnoreMove | LocalPInvoke.SetWindowPosFlags.IgnoreResize);
                     Taskbar.SetTaskbarState(LocalPInvoke.AppBarStates.AlwaysOnTop, taskbar.TaskbarHwnd);
                 }
+                rtbAutoHideEngaged = true;
+                return;
             }
-            else if (!enabled)
+
+            // Disable / restore
+            if (!rtbAutoHideEngaged && activeSettings.AutoHide <= 0)
             {
-                foreach (Types.Taskbar taskbar in taskbarDetails)
+                return;
+            }
+
+            interaction.AddLog("AutoHide disengage — restore work area without touching Windows ABS_AUTOHIDE");
+            foreach (Types.Taskbar taskbar in taskbarDetails)
+            {
+                LocalPInvoke.SetWindowPos(taskbar.TaskbarHwnd, new IntPtr(-1), 0, 0, 0, 0, LocalPInvoke.SetWindowPosFlags.IgnoreMove | LocalPInvoke.SetWindowPosFlags.IgnoreResize);
+                Taskbar.SetTaskbarState(LocalPInvoke.AppBarStates.AlwaysOnTop, taskbar.TaskbarHwnd);
+
+                MonitorStuff.DisplayInfoCollection Displays = MonitorStuff.GetDisplays();
+                foreach (MonitorStuff.DisplayInfo display in Displays)
                 {
-                    LocalPInvoke.SetWindowPos(taskbar.TaskbarHwnd, new IntPtr(-1), 0, 0, 0, 0, LocalPInvoke.SetWindowPosFlags.IgnoreMove | LocalPInvoke.SetWindowPosFlags.IgnoreResize);
-                    if (workAreaMisconfigured)
+                    int taskbarHeight = taskbar.TaskbarRect.Bottom - taskbar.TaskbarRect.Top;
+                    LocalPInvoke.RECT workArea = display.MonitorArea;
+                    workArea.Bottom = workArea.Bottom - taskbarHeight;
+                    Interaction.SetWorkspace(workArea);
+                }
+            }
+            rtbAutoHideEngaged = false;
+        }
+
+        /// <summary>
+        /// Clears SetWindowRgn / layered flags so Explorer looks stock again. Safe to call more than once.
+        /// </summary>
+        public void RestoreAllTaskbars(string reason)
+        {
+            if (taskbarsRestoredOnExit)
+            {
+                return;
+            }
+            taskbarsRestoredOnExit = true;
+            try
+            {
+                List<Types.Taskbar> bars;
+                Types.Settings settingsCopy;
+                lock (DataLock)
+                {
+                    bars = taskbarDetails != null ? new List<Types.Taskbar>(taskbarDetails) : new List<Types.Taskbar>();
+                    settingsCopy = activeSettings != null ? activeSettings.Clone() : new Types.Settings();
+                }
+                interaction.AddLog($"RestoreAllTaskbars ({reason}) count={bars.Count}");
+                foreach (Types.Taskbar tb in bars)
+                {
+                    try
                     {
-                        Taskbar.SetTaskbarState(LocalPInvoke.AppBarStates.AutoHide, taskbar.TaskbarHwnd);
-                        Taskbar.SetTaskbarState(LocalPInvoke.AppBarStates.AlwaysOnTop, taskbar.TaskbarHwnd);
+                        Taskbar.ResetTaskbar(tb, settingsCopy);
                     }
-
-                    MonitorStuff.DisplayInfoCollection Displays = MonitorStuff.GetDisplays();
-
-                    foreach (MonitorStuff.DisplayInfo display in Displays)
+                    catch (Exception ex)
                     {
-                        taskbarHeight = taskbar.TaskbarRect.Bottom - taskbar.TaskbarRect.Top;
-                        LocalPInvoke.RECT workArea = display.MonitorArea;
-                        workArea.Bottom = workArea.Bottom - taskbarHeight;
-                        Interaction.SetWorkspace(workArea);
+                        interaction.AddLog($"ResetTaskbar failed: {ex.Message}");
                     }
                 }
+                if (rtbAutoHideEngaged || settingsCopy.AutoHide > 0)
+                {
+                    AutoHide(false, bars);
+                }
+            }
+            catch (Exception ex)
+            {
+                interaction.AddLog($"RestoreAllTaskbars failed: {ex}");
+                taskbarsRestoredOnExit = false;
             }
         }
 
@@ -518,6 +572,34 @@ namespace RoundedTB
         }
 
 
+        private void TaskbarThread_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
+        {
+            if (e.Cancelled)
+            {
+                interaction.AddLog("taskbarThread cancelled");
+                return;
+            }
+            if (e.Error != null)
+            {
+                interaction.AddLog($"taskbarThread fatal error: {e.Error}");
+                // Auto-restart worker unless we are exiting for real.
+                if (!shouldReallyDieNoReally && !isAlreadyRunning)
+                {
+                    interaction.AddLog("restarting taskbarThread after fatal error");
+                    try
+                    {
+                        taskbarThread.RunWorkerAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        interaction.AddLog($"failed to restart taskbarThread: {ex}");
+                    }
+                }
+                return;
+            }
+            interaction.AddLog("taskbarThread completed without cancel/error (unexpected)");
+        }
+
         public void ApplyButton_Click(object sender, RoutedEventArgs e)
         {
             int mt = 0;
@@ -560,16 +642,31 @@ namespace RoundedTB
 
             try
             {
-                foreach (Types.Taskbar taskbar in taskbarDetails)
+                List<Types.Taskbar> bars;
+                Types.Settings settingsSnapshot;
+                lock (DataLock)
                 {
-                    int isFullTest = taskbar.TrayRect.Left - taskbar.AppListRect.Right;
-                    if (!activeSettings.IsDynamic || (isFullTest <= taskbar.ScaleFactor * 25 && isFullTest > 0 && taskbar.TrayRect.Left != 0))
+                    bars = taskbarDetails;
+                    settingsSnapshot = activeSettings.Clone();
+                }
+                foreach (Types.Taskbar taskbar in bars)
+                {
+                    Types.Taskbar measured = settingsSnapshot.IsDynamic
+                        ? Taskbar.ClampAppListAwayFromTray(taskbar, taskbar.ScaleFactor)
+                        : taskbar;
+                    int isFullTest = measured.TrayRect.Left - measured.AppListRect.Right;
+                    bool forceSimpleNearTray = settingsSnapshot.ShowTray
+                        && measured.TrayRect.Left != 0
+                        && isFullTest <= taskbar.ScaleFactor * 25
+                        && isFullTest > 0;
+                    if (!settingsSnapshot.IsDynamic || forceSimpleNearTray)
                     {
-                        Taskbar.UpdateSimpleTaskbar(taskbar, activeSettings);
+                        Taskbar.UpdateSimpleTaskbar(taskbar, settingsSnapshot);
                     }
                     else
                     {
-                        Taskbar.UpdateDynamicTaskbar(taskbar, activeSettings);
+                        taskbar.AppListRect = measured.AppListRect;
+                        Taskbar.UpdateDynamicTaskbar(taskbar, settingsSnapshot);
                     }
                 }
             }
@@ -594,13 +691,13 @@ namespace RoundedTB
                 taskbarThread.RunWorkerAsync((mt, ml, mb, mr, 0));
             }
 
-            if (activeSettings.AutoHide < 1)
+            if (activeSettings.AutoHide > 0)
             {
-                AutoHide(false, taskbarDetails);
+                AutoHide(true, taskbarDetails);
             }
             else
             {
-                AutoHide(true, taskbarDetails);
+                AutoHide(false, taskbarDetails);
             }
             interaction.WriteJSON();
             TrayIconCheck(isForceReset: true);
@@ -617,6 +714,7 @@ namespace RoundedTB
                 e.Cancel = true;
                 Visibility = Visibility.Hidden;
                 ShowMenuItem.Header = "Show RoundedTB";
+                interaction.AddLog("UI hidden (close cancelled; process stays alive)");
             }
             else
             {
@@ -636,21 +734,7 @@ namespace RoundedTB
                     System.Threading.Thread.Sleep(100);
                 }
 
-                try
-                {
-                    foreach (var tbDeets in taskbarDetails)
-                    {
-                        Taskbar.ResetTaskbar(tbDeets, activeSettings);
-                    }
-                    if (activeSettings.AutoHide > 0)
-                    {
-                        AutoHide(false, taskbarDetails);
-                    }
-                }
-                catch (InvalidOperationException aaaa)
-                {
-                    interaction.AddLog($"Taskbar structure changed on exit:\n{aaaa.Message}");
-                }
+                RestoreAllTaskbars("OnClosing");
                 interaction.AddLog("Exiting RoundedTB.");
             }
             if (!isAlreadyRunning)
@@ -661,13 +745,19 @@ namespace RoundedTB
 
         private void CloseMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            // Close any popups - leave main window for now
+            // Flag BEFORE any Close/Shutdown so OnClosing always takes the restore path.
+            shouldReallyDieNoReally = true;
+            interaction.AddLog("Close menu clicked — will restore taskbars and exit");
+
+            // Close accessory windows first; MainWindow last.
             for (int windowCount = App.Current.Windows.Count - 1; windowCount >= 0; windowCount--)
             {
-                App.Current.Windows[windowCount].Close();
+                Window w = App.Current.Windows[windowCount];
+                if (!ReferenceEquals(w, this))
+                {
+                    w.Close();
+                }
             }
-
-            shouldReallyDieNoReally = true;
 
             Close();
         }
@@ -721,11 +811,18 @@ namespace RoundedTB
                 {
                     Directory.CreateDirectory(shortcutFolder);
                 }
-                WshShell shellClass = new WshShell();
                 string rtbStartupLink = Path.Combine(shortcutFolder, "RoundedTB.lnk");
-                IWshShortcut shortcut = (IWshShortcut)shellClass.CreateShortcut(rtbStartupLink);
-                shortcut.TargetPath = Environment.GetCommandLineArgs()[0];
-                shortcut.IconLocation = Environment.GetCommandLineArgs()[0];
+                string targetPath = Environment.GetCommandLineArgs()[0];
+                // Late-bound WScript.Shell — avoids COMReference (unsupported on .NET SDK MSBuild).
+                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType == null)
+                {
+                    return;
+                }
+                dynamic shell = Activator.CreateInstance(shellType);
+                dynamic shortcut = shell.CreateShortcut(rtbStartupLink);
+                shortcut.TargetPath = targetPath;
+                shortcut.IconLocation = targetPath;
                 shortcut.Arguments = "";
                 shortcut.Description = "Start RoundedTB";
                 shortcut.Save();

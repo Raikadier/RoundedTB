@@ -1,4 +1,4 @@
-﻿using Newtonsoft.Json;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -13,7 +13,6 @@ namespace RoundedTB
     public class Interaction
     {
         public MainWindow mw;
-        string m = "";
 
         public Interaction()
         {
@@ -57,7 +56,12 @@ namespace RoundedTB
 
         public void FileSystem()
         {
-            File.Create(mw.logPath).Close();
+            // Keep prior log across restarts so unexpected exits leave evidence.
+            if (!File.Exists(mw.logPath))
+            {
+                File.Create(mw.logPath).Close();
+            }
+            AddLog("--- session start ---");
             if (!File.Exists(mw.configPath))
             {
                 if (mw.isWindows11)
@@ -128,10 +132,68 @@ namespace RoundedTB
             return result;
         }
 
+        private static readonly object LogLock = new object();
+        private const long MaxLogBytes = 5 * 1024 * 1024;
+
         public void AddLog(string message)
         {
-            //m = $"[{DateTime.Now}] {message}\n";
-            //File.AppendAllText(mw.logPath, m);
+            string path = null;
+            try
+            {
+                path = mw?.logPath;
+                if (string.IsNullOrEmpty(path))
+                {
+                    path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "rtb.log");
+                }
+
+                string line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}{Environment.NewLine}";
+                lock (LogLock)
+                {
+                    try
+                    {
+                        if (File.Exists(path))
+                        {
+                            FileInfo fi = new FileInfo(path);
+                            if (fi.Length > MaxLogBytes)
+                            {
+                                string bak = path + ".old";
+                                if (File.Exists(bak))
+                                {
+                                    File.Delete(bak);
+                                }
+                                File.Move(path, bak);
+                            }
+                        }
+                        File.AppendAllText(path, line);
+                    }
+                    catch
+                    {
+                        // Never let logging crash the app.
+                    }
+                }
+                Debug.WriteLine(line.TrimEnd());
+            }
+            catch
+            {
+                // Never let logging crash the app.
+            }
+        }
+
+        /// <summary>Static entry for early/global crash handlers before MainWindow exists.</summary>
+        public static void WriteCrashLog(string message)
+        {
+            try
+            {
+                string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "rtb.log");
+                string line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}{Environment.NewLine}";
+                lock (LogLock)
+                {
+                    File.AppendAllText(path, line);
+                }
+            }
+            catch
+            {
+            }
         }
 
         public static bool IsTranslucentTBRunning()

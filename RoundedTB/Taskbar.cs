@@ -173,6 +173,7 @@ namespace RoundedTB
         public static bool UpdateSimpleTaskbar(Types.Taskbar taskbar, Types.Settings settings)
         {
             IntPtr region = IntPtr.Zero;
+            bool regionOwnedBySystem = false;
             try
             {
                 // Create an effective region to be applied to the taskbar
@@ -186,12 +187,22 @@ namespace RoundedTB
                 };
 
                 region = LocalPInvoke.CreateRoundRectRgn(taskbarEffectiveRegion.Left, taskbarEffectiveRegion.Top, taskbarEffectiveRegion.Width, taskbarEffectiveRegion.Height, taskbarEffectiveRegion.CornerRadius, taskbarEffectiveRegion.CornerRadius);
-                LocalPInvoke.SetWindowRgn(taskbar.TaskbarHwnd, region, true);
-                if (settings.CompositionCompat)
+                if (region == IntPtr.Zero)
                 {
-                    Interaction.UpdateTranslucentTB(taskbar.TaskbarHwnd);
+                    return false;
                 }
-                return true;
+
+                // On success, the system owns the HRGN — must not DeleteObject it.
+                if (LocalPInvoke.SetWindowRgn(taskbar.TaskbarHwnd, region, true) != 0)
+                {
+                    regionOwnedBySystem = true;
+                    if (settings.CompositionCompat)
+                    {
+                        Interaction.UpdateTranslucentTB(taskbar.TaskbarHwnd);
+                    }
+                    return true;
+                }
+                return false;
             }
             catch (Exception)
             {
@@ -199,7 +210,10 @@ namespace RoundedTB
             }
             finally
             {
-                LocalPInvoke.DeleteObject(region);
+                if (!regionOwnedBySystem && region != IntPtr.Zero)
+                {
+                    LocalPInvoke.DeleteObject(region);
+                }
             }
         }
 
@@ -215,6 +229,7 @@ namespace RoundedTB
             IntPtr trayRegion = IntPtr.Zero;
             IntPtr widgetsRegion = IntPtr.Zero;
             IntPtr clockRegion = IntPtr.Zero;
+            bool workingRegionOwnedBySystem = false;
             try
             {
                 int centredDistanceFromEdge = 0;
@@ -345,14 +360,24 @@ namespace RoundedTB
                 }
 
 
-                // Apply the final region to the taskbar
-                LocalPInvoke.SetWindowRgn(taskbar.TaskbarHwnd, workingRegion, true);
-                if (settings.CompositionCompat)
+                // Apply the final region to the taskbar.
+                // On success the system owns workingRegion — do not DeleteObject it.
+                // Combined source regions (clock/tray/widgets) remain ours to free.
+                if (workingRegion == IntPtr.Zero)
                 {
-                    Interaction.UpdateTranslucentTB(taskbar.TaskbarHwnd);
+                    return false;
                 }
 
-                return true;
+                if (LocalPInvoke.SetWindowRgn(taskbar.TaskbarHwnd, workingRegion, true) != 0)
+                {
+                    workingRegionOwnedBySystem = true;
+                    if (settings.CompositionCompat)
+                    {
+                        Interaction.UpdateTranslucentTB(taskbar.TaskbarHwnd);
+                    }
+                    return true;
+                }
+                return false;
             }
             catch (Exception)
             {
@@ -360,10 +385,22 @@ namespace RoundedTB
             }
             finally
             {
-                LocalPInvoke.DeleteObject(clockRegion);
-                LocalPInvoke.DeleteObject(widgetsRegion);
-                LocalPInvoke.DeleteObject(trayRegion);
-                LocalPInvoke.DeleteObject(workingRegion);
+                if (clockRegion != IntPtr.Zero)
+                {
+                    LocalPInvoke.DeleteObject(clockRegion);
+                }
+                if (widgetsRegion != IntPtr.Zero)
+                {
+                    LocalPInvoke.DeleteObject(widgetsRegion);
+                }
+                if (trayRegion != IntPtr.Zero)
+                {
+                    LocalPInvoke.DeleteObject(trayRegion);
+                }
+                if (!workingRegionOwnedBySystem && workingRegion != IntPtr.Zero)
+                {
+                    LocalPInvoke.DeleteObject(workingRegion);
+                }
             }
 
         }
@@ -413,6 +450,42 @@ namespace RoundedTB
         }
 
         /// <summary>
+        /// Caps AppListRect.Right so the dynamic pill never overlaps the tray.
+        /// Prevents CheckDynamicUpdateIsValid from rejecting updates (frozen pill) when many icons are open.
+        /// </summary>
+        public static Types.Taskbar ClampAppListAwayFromTray(Types.Taskbar tb, double scaleFactor)
+        {
+            if (tb == null || tb.TrayRect.Left == 0)
+            {
+                return tb;
+            }
+
+            int pad = Math.Max(2, Convert.ToInt32(2 * scaleFactor));
+            int maxRight = tb.TrayRect.Left - pad;
+            if (tb.AppListRect.Right <= maxRight)
+            {
+                return tb;
+            }
+
+            LocalPInvoke.RECT app = tb.AppListRect;
+            int minRight = app.Left + Math.Max(pad, Convert.ToInt32(20 * scaleFactor));
+            app.Right = Math.Max(minRight, maxRight);
+
+            return new Types.Taskbar
+            {
+                TaskbarHwnd = tb.TaskbarHwnd,
+                TrayHwnd = tb.TrayHwnd,
+                AppListHwnd = tb.AppListHwnd,
+                AppListXaml = tb.AppListXaml,
+                TaskbarRect = tb.TaskbarRect,
+                TrayRect = tb.TrayRect,
+                AppListRect = app,
+                ScaleFactor = tb.ScaleFactor,
+                IsSecondary = tb.IsSecondary
+            };
+        }
+
+        /// <summary>
         /// Checks if the provided update is valid.
         /// </summary>
         /// <returns>
@@ -438,12 +511,8 @@ namespace RoundedTB
             int newAppListWidth = newTB.AppListRect.Right - newTB.AppListRect.Left;
             int currentAppListWidth = currentTB.AppListRect.Right - currentTB.AppListRect.Left;
 
-            if (newTB.AppListRect.Right >= newTB.TrayRect.Left && newTB.TrayRect.Left != 0)
-            {
-                return false;
-            }
-
-            if (newAppListWidth == newTB.TrayRect.Left && newTB.TrayRect.Left != 0)
+            // Overlap with tray: caller should ClampAppListAwayFromTray first. Still reject raw overlap.
+            if (newTB.TrayRect.Left != 0 && newTB.AppListRect.Right > newTB.TrayRect.Left)
             {
                 return false;
             }
@@ -539,7 +608,11 @@ namespace RoundedTB
                     {
                         hwndSecTray = LocalPInvoke.FindWindowExA(hwndCurrent, IntPtr.Zero, "TrayNotifyWnd", null); // Get handle to this secondary taskbar's tray
                     }
-                    LocalPInvoke.GetWindowRect(hwndTray, out LocalPInvoke.RECT rectSecTray); // Get the RECT for this secondary taskbar's tray
+                    LocalPInvoke.RECT rectSecTray = default;
+                    if (hwndSecTray != IntPtr.Zero)
+                    {
+                        LocalPInvoke.GetWindowRect(hwndSecTray, out rectSecTray);
+                    }
                     IntPtr hwndWorkerW = LocalPInvoke.FindWindowExA(hwndCurrent, IntPtr.Zero, "WorkerW", null);
                     IntPtr hwndSecAppList = IntPtr.Zero;
                     // windows 11 22H2 has multiple WorkerW handles.
@@ -634,6 +707,58 @@ namespace RoundedTB
             }
 
             return retVal;
+        }
+
+        /// <summary>
+        /// True when Windows Settings → Automatically hide the taskbar is active for this appbar.
+        /// </summary>
+        public static bool IsWindowsTaskbarAutoHideEnabled(IntPtr hwnd)
+        {
+            LocalPInvoke.APPBARDATA data = new LocalPInvoke.APPBARDATA();
+            data.cbSize = (uint)Marshal.SizeOf(data);
+            data.hWnd = hwnd;
+            IntPtr result = LocalPInvoke.SHAppBarMessage(LocalPInvoke.ABM.GetState, ref data);
+            return (result.ToInt32() & LocalPInvoke.ABS.Autohide) == LocalPInvoke.ABS.Autohide;
+        }
+
+        /// <summary>
+        /// True when the taskbar window is mostly off its monitor (Windows native autohide peek).
+        /// Upstream (torchgm #36): do not fight SetWindowRgn while peeked/sliding — freeze RTB updates.
+        /// </summary>
+        public static bool IsTaskbarEdgeRevealOnly(IntPtr hwnd)
+        {
+            if (!LocalPInvoke.GetWindowRect(hwnd, out LocalPInvoke.RECT wr))
+            {
+                return false;
+            }
+
+            IntPtr hMon = LocalPInvoke.MonitorFromWindow(hwnd, 2);
+            MonitorStuff.MONITORINFO mi = new MonitorStuff.MONITORINFO();
+            mi.cbSize = (uint)Marshal.SizeOf(mi);
+            if (!MonitorStuff.GetMonitorInfo(hMon, ref mi))
+            {
+                return false;
+            }
+
+            LocalPInvoke.RECT mon = mi.rcMonitor;
+            int visTop = Math.Max(wr.Top, mon.Top);
+            int visBot = Math.Min(wr.Bottom, mon.Bottom);
+            int visLeft = Math.Max(wr.Left, mon.Left);
+            int visRight = Math.Min(wr.Right, mon.Right);
+            int visibleH = Math.Max(0, visBot - visTop);
+            int visibleW = Math.Max(0, visRight - visLeft);
+            int height = Math.Max(1, wr.Bottom - wr.Top);
+            int width = Math.Max(1, wr.Right - wr.Left);
+
+            if (visibleW > width / 2 && visibleH > 0 && visibleH < Math.Max(16, height / 3))
+            {
+                return true;
+            }
+            if (visibleH > height / 2 && visibleW > 0 && visibleW < Math.Max(16, width / 3))
+            {
+                return true;
+            }
+            return false;
         }
 
         /// <summary>

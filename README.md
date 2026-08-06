@@ -38,7 +38,25 @@ RoundedTB was created by torchgm. thanks.
 https://github.com/RoundedTB/RoundedTB
 
 torchgm says "RoundedTB is just a hobby of mine, and I'm certainly not an expert in this field, so I'm really sorry if you encounter a bug!".
-me too.
+
+## This fork (Raikadier hardening)
+
+Hardening on top of Gniang/`b78e5d6` for current Windows 11: GDI region ownership, UIA AppList measure, worker thread-safety, fast non-blocking RTB fade, net8, crash logging, reliable taskbar restore on exit, native-autohide freeze (see torchgm [#36](https://github.com/torchgm/RoundedTB/issues/36)).
+
+- Agent / maintainer context: [`AGENTS.md`](AGENTS.md)
+- Full fixing history: [`FIXING.md`](FIXING.md)
+- Architecture map: [`ARCHITECTURE.md`](ARCHITECTURE.md)
+
+**Autohide tip:** Prefer RoundedTB **Always hide**, or Windows “Automatically hide the taskbar” **off**. Combining Windows native autohide with `SetWindowRgn` causes flicker (upstream limitation).
+
+Build (requires .NET 8 SDK):
+
+```powershell
+dotnet build RoundedTB.sln -c Release
+```
+
+Exe: `RoundedTB\bin\Release\net8.0-windows10.0.19041.0\RoundedTB.exe`  
+Logs: `%LocalAppData%\rtb.log` · Config: `%LocalAppData%\rtb.json`
 
 If anything breaks catastrophically, press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Esc</kbd> to open Task Manager, end RoundedTB and then restart Explorer. At worst, just reboot your PC. RoundedTB makes no permanent changes (though it will run on startup if you enable it from the tray icon), so restarting should clear any issues.
 

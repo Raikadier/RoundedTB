@@ -98,9 +98,9 @@
 
             <Grid Margin="0,0,10,83" HorizontalAlignment="Right" Width="133" Height="50" VerticalAlignment="Bottom">
                 <Label Content="Auto-hide" Height="20" VerticalAlignment="Top"/>
-                <ComboBox x:Name="autoHideComboBox" Margin="0,18,0,0" VerticalAlignment="Top">
+                <ComboBox x:Name="autoHideComboBox" Margin="0,18,0,0" VerticalAlignment="Top" ToolTip="RoundedTB fade/hide (recommended). Windows Settings 'Automatically hide the taskbar' fights SetWindowRgn and causes flicker — prefer this Always hide, or Always show with Windows autohide OFF.">
                     <ComboBoxItem>Always show</ComboBoxItem>
-                    <ComboBoxItem>Always hide</ComboBoxItem>
+                    <ComboBoxItem>Always hide (RTB; prefer over Windows autohide)</ComboBoxItem>
                     <ComboBoxItem>[unavailable]</ComboBoxItem>
                 </ComboBox>
             </Grid>

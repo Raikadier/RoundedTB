@@ -29,12 +29,21 @@ namespace RoundedTB
             public bool TaskbarHidden { get; set; } // Specifies if this taskbar is currently hidden by RTB
             public bool TrayHidden { get; set; } // Specifies if the tray is currently hidden by RTB on this taskbar
             public int AppListWidth { get; set; } // Specifies the width of the app list
-            public TaskbarEffect TaskbarEffectWindow { get; set; } // Unused clone to apply effects to the taskbar
             public bool IsSecondary { get; set; }
+            /// <summary>Non-blocking fade: 0 idle, 1 fade-in, -1 fade-out.</summary>
+            public int FadeAnimDir { get; set; }
+            /// <summary>Index into FadeSteps for the current direction.</summary>
+            public int FadeAnimStep { get; set; }
+            /// <summary>Last applied ShowSegmentsOnHover tray override (avoid SetWindowRgn every tick).</summary>
+            public bool HoverShowTray { get; set; }
+            /// <summary>Last applied ShowSegmentsOnHover widgets override.</summary>
+            public bool HoverShowWidgets { get; set; }
+            /// <summary>True while skipping SetWindowRgn because Windows native autohide is sliding/peeking.</summary>
+            public bool NativeAhFrozen { get; set; }
 
             public void Dispose()
             {
-                AppListXaml.Dispose();
+                AppListXaml?.Dispose();
             }
         }
 
@@ -59,34 +68,80 @@ namespace RoundedTB
 
             private static IUIAutomationElement? GetTaskbarFrameElement(IntPtr hwndTaskbarMain, IUIAutomation uia)
             {
-                IntPtr hwndDesktopXamlSrc = LocalPInvoke.FindWindowExA(hwndTaskbarMain, IntPtr.Zero, "Windows.UI.Composition.DesktopWindowContentBridge", null);
-                if (hwndDesktopXamlSrc == IntPtr.Zero)
+                if (!LocalPInvoke.IsWindow(hwndTaskbarMain))
                 {
                     return null;
                 }
-                IntPtr hwndWindowCls = LocalPInvoke.FindWindowExA(hwndDesktopXamlSrc, IntPtr.Zero, "Windows.UI.Input.InputSite.WindowClass", null);
-                if (hwndWindowCls == IntPtr.Zero)
-                {
-                    return null;
-                }
-                IUIAutomationElement taskEle = uia.ElementFromHandle(hwndWindowCls);
-                IUIAutomationCondition con = uia.CreatePropertyCondition(UIA_PropertyIds.UIA_AutomationIdPropertyId, "TaskbarFrame");
-                IUIAutomationElement taskFrameEle = taskEle.FindFirst(Interop.UIAutomationClient.TreeScope.TreeScope_Children, con);
 
-                Marshal.ReleaseComObject(con);
-                Marshal.ReleaseComObject(taskEle);
-                AppListXaml.appListXamlAlreadyExists = true;
-                return taskFrameEle;
+                // Fast path: hardcoded HWND descent (Win11 21H2..23H2).
+                try
+                {
+                    IntPtr hwndDesktopXamlSrc = LocalPInvoke.FindWindowExA(hwndTaskbarMain, IntPtr.Zero, "Windows.UI.Composition.DesktopWindowContentBridge", null);
+                    if (hwndDesktopXamlSrc != IntPtr.Zero)
+                    {
+                        IntPtr hwndWindowCls = LocalPInvoke.FindWindowExA(hwndDesktopXamlSrc, IntPtr.Zero, "Windows.UI.Input.InputSite.WindowClass", null);
+                        if (hwndWindowCls != IntPtr.Zero)
+                        {
+                            IUIAutomationElement taskEle = uia.ElementFromHandle(hwndWindowCls);
+                            IUIAutomationCondition con = uia.CreatePropertyCondition(UIA_PropertyIds.UIA_AutomationIdPropertyId, "TaskbarFrame");
+                            IUIAutomationElement? taskFrameEle = taskEle.FindFirst(Interop.UIAutomationClient.TreeScope.TreeScope_Children, con);
+
+                            Marshal.ReleaseComObject(con);
+                            Marshal.ReleaseComObject(taskEle);
+                            if (taskFrameEle != null)
+                            {
+                                AppListXaml.appListXamlAlreadyExists = true;
+                                return taskFrameEle;
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"AppListXaml: TaskbarFrame fast path threw: {ex.Message}");
+                }
+
+                // Fallback: descendants search from Shell_TrayWnd (resilient to 24H2+ XAML reshuffles).
+                try
+                {
+                    IUIAutomationElement rootEle = uia.ElementFromHandle(hwndTaskbarMain);
+                    IUIAutomationCondition con = uia.CreatePropertyCondition(UIA_PropertyIds.UIA_AutomationIdPropertyId, "TaskbarFrame");
+                    IUIAutomationElement? taskFrameEle = rootEle.FindFirst(Interop.UIAutomationClient.TreeScope.TreeScope_Descendants, con);
+
+                    Marshal.ReleaseComObject(con);
+                    Marshal.ReleaseComObject(rootEle);
+                    if (taskFrameEle != null)
+                    {
+                        AppListXaml.appListXamlAlreadyExists = true;
+                        return taskFrameEle;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"AppListXaml: TaskbarFrame descendants fallback threw: {ex.Message}");
+                }
+
+                System.Diagnostics.Debug.WriteLine("AppListXaml: TaskbarFrame not found via fast path or descendants fallback");
+                return null;
             }
 
 
             public void ReloadTaskbarFrameElement()
             {
-                // When the taskbar is restarted, there's a possibility that XAML elements may not exist when the taskbar handle is created.
-                // Therefore, if XAML elements have been previously acquired, it's considered a restart, and we attempt to retrieve XAML again.
+                // When the taskbar is restarted, XAML may not exist yet when the handle appears.
+                // If XAML was seen before, treat as restart and retry acquisition.
                 if (_uia == null)
                 {
                     return;
+                }
+                if (!LocalPInvoke.IsWindow(_hwndTaskbarMain))
+                {
+                    return;
+                }
+                if (_taskbarFrame != null)
+                {
+                    Marshal.ReleaseComObject(_taskbarFrame);
+                    _taskbarFrame = null;
                 }
                 _taskbarFrame = GetTaskbarFrameElement(_hwndTaskbarMain, _uia);
             }
@@ -146,10 +201,15 @@ namespace RoundedTB
                     };
                     return rect;
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    // TODO: write log.
-                    // An error occurs at here, the AppListXaml object will be recreated, so not reqire actions.
+                    System.Diagnostics.Debug.WriteLine($"AppListXaml.GetWindowRect failed: {ex.Message}");
+                    // Drop stale frame so ReloadRequired can re-acquire after Explorer restart.
+                    if (_taskbarFrame != null)
+                    {
+                        try { Marshal.ReleaseComObject(_taskbarFrame); } catch { }
+                        _taskbarFrame = null;
+                    }
                     return null;
                 }
                 finally
@@ -203,6 +263,34 @@ namespace RoundedTB
             public bool FillOnTaskSwitch { get; set; }
             public bool ShowSegmentsOnHover { get; set; }
             public int AutoHide { get; set; }
+
+            /// <summary>Deep copy so worker hover overrides never mutate UI-bound settings.</summary>
+            public Settings Clone()
+            {
+                return new Settings
+                {
+                    Version = Version,
+                    SimpleTaskbarLayout = SimpleTaskbarLayout?.Clone() ?? new SegmentSettings(),
+                    DynamicAppListLayout = DynamicAppListLayout?.Clone() ?? new SegmentSettings(),
+                    DynamicTrayLayout = DynamicTrayLayout?.Clone() ?? new SegmentSettings(),
+                    DynamicWidgetsLayout = DynamicWidgetsLayout?.Clone() ?? new SegmentSettings(),
+                    DynamicSecondaryClockLayout = DynamicSecondaryClockLayout?.Clone() ?? new SegmentSettings(),
+                    WidgetsWidth = WidgetsWidth,
+                    ClockWidth = ClockWidth,
+                    IsDynamic = IsDynamic,
+                    IsCentred = IsCentred,
+                    IsWindows11 = IsWindows11,
+                    ShowTray = ShowTray,
+                    ShowWidgets = ShowWidgets,
+                    ShowSecondaryClock = ShowSecondaryClock,
+                    CompositionCompat = CompositionCompat,
+                    IsNotFirstLaunch = IsNotFirstLaunch,
+                    FillOnMaximise = FillOnMaximise,
+                    FillOnTaskSwitch = FillOnTaskSwitch,
+                    ShowSegmentsOnHover = ShowSegmentsOnHover,
+                    AutoHide = AutoHide
+                };
+            }
         }
 
         public class EffectiveRegion
@@ -221,6 +309,18 @@ namespace RoundedTB
             public int MarginLeft { get; set; }
             public int MarginBottom { get; set; }
             public int MarginRight { get; set; }
+
+            public SegmentSettings Clone()
+            {
+                return new SegmentSettings
+                {
+                    CornerRadius = CornerRadius,
+                    MarginTop = MarginTop,
+                    MarginLeft = MarginLeft,
+                    MarginBottom = MarginBottom,
+                    MarginRight = MarginRight
+                };
+            }
         }
 
         public enum TrayMode
