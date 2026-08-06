@@ -2,11 +2,22 @@
 
 Guía corta para agentes (Cursor u otros) que abran este repo.
 
+## Handoff activo (lee primero)
+
+Hay trabajo pendiente de **validación en Windows local**.  
+Detalle completo: [`HANDOFF.md`](HANDOFF.md)
+
+- Rama: `cursor/tray-autohide-fillmax-ac69`
+- PR: https://github.com/Raikadier/RoundedTB/pull/1
+- Cloud Linux **no** puede build/run WPF de verdad → usar Cursor Desktop **This Computer**
+- Primer comando en la máquina del usuario: stash/checkout + `.\build-install-run.ps1` (ver HANDOFF §0)
+
 ## Antes de tocar código
 
-1. Leer [`FIXING.md`](FIXING.md) — historial completo del hardening y trampas.
-2. Leer [`ARCHITECTURE.md`](ARCHITECTURE.md) — mapa runtime y módulos.
-3. No inventar segunda base de docs fuera del repo para este proyecto.
+1. Leer [`HANDOFF.md`](HANDOFF.md) si continúas el ciclo tray / AH / FillOnMaximise.
+2. Leer [`FIXING.md`](FIXING.md) — historial completo del hardening y trampas.
+3. Leer [`ARCHITECTURE.md`](ARCHITECTURE.md) — mapa runtime y módulos.
+4. No inventar segunda base de docs fuera del repo para este proyecto.
 
 ## Stack rápido
 
@@ -31,15 +42,18 @@ Guía corta para agentes (Cursor u otros) que abran este repo.
 ```powershell
 dotnet build RoundedTB.sln -c Release
 # exe: RoundedTB\bin\Release\net8.0-windows10.0.19041.0\RoundedTB.exe
+
+# Build + Program Files + Start Menu + launch (pide UAC):
+.\build-install-run.ps1
 ```
 
 ## Al diagnosticar
 
-1. ¿Proceso vivo? `Get-Process RoundedTB`
-2. Cola de `rtb.log` (heartbeat ~60 s, excepciones, `App.OnExit`, `RestoreAllTaskbars`)
+1. ¿Proceso vivo? `Get-Process RoundedTB` (esperar main + watchdog)
+2. Cola de `rtb.log` (heartbeat ~60 s, excepciones, `App.OnExit`, `RestoreAllTaskbars`, `UI hidden`)
 3. Settings en `rtb.json` — `FillOnMaximise`, `IsDynamic`, `ShowSegmentsOnHover`, `AutoHide`
 4. Dynamic: UIA `TaskbarFrame` desde `InputSite.WindowClass`
-5. Parpadeo + Windows AH: esperado si se pelea el slide; ver FIXING §11
+5. Parpadeo + Windows AH: esperado residual; ver FIXING §11 / HANDOFF
 
 ## Alcance preferido
 
