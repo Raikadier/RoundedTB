@@ -216,14 +216,13 @@ namespace RoundedTB
                             taskbars[current].AppListHwnd,
                             taskbars[current].AppListXaml);
 
-                        // Windows native autohide (torchgm #36): Explorer sets regions while sliding.
-                        // Peek: thin edge strip for hover. Slide: clear RTB RGN + freeze + keep TaskbarRect fresh.
-                        // Stale TaskbarRect during freeze made rectMoved stick forever and blocked hide/reapply.
-                        // Leave RTB AutoHide off when using Windows Settings autohide.
+                        // Windows native autohide (torchgm #36) v10:
+                        // Peek+near-edge: pre-arm pill|strip. Show slide: stay alpha=1 until rect stable, then 255.
+                        // (Revealing at alpha 255 mid-slide still shows Explorer stock frames ~half the time.)
                         bool nativeAutoHide = Taskbar.IsWindowsTaskbarAutoHideEnabled(taskbars[current].TaskbarHwnd);
                         if (nativeAutoHide && !loggedNativeAutoHideCompat)
                         {
-                            mw.interaction.AddLog("Windows native autohide detected - peek hit-strip + clear/freeze on slide (RTB AutoHide off recommended; torchgm #36)");
+                            mw.interaction.AddLog("Windows native autohide detected - peek arm; show stays alpha=1 until stable (torchgm #36)");
                             loggedNativeAutoHideCompat = true;
                         }
 
@@ -237,37 +236,75 @@ namespace RoundedTB
 
                         if (peek)
                         {
-                            Taskbar.ApplyNativeAutohidePeekHitRegion(taskbars[current].TaskbarHwnd);
                             taskbars[current].TaskbarRect = newTaskbar.TaskbarRect;
                             taskbars[current].AppListRect = newTaskbar.AppListRect;
                             taskbars[current].TrayRect = newTaskbar.TrayRect;
                             taskbars[current].NativeAhFrozen = true;
                             taskbars[current].NativeAhCleared = true;
-                            fastPollRemaining = 25;
+                            taskbars[current].NativeAhRevealPending = false;
+                            taskbars[current].FadeAnimDir = 0;
+                            taskbars[current].FadeAnimStep = 0;
+
+                            LocalPInvoke.GetCursorPos(out LocalPInvoke.POINT edgePt);
+                            bool nearEdge = Taskbar.IsCursorNearAutohideEdge(taskbars[current].TaskbarHwnd, edgePt);
+
+                            if (nearEdge && taskbars[current].HasLastGoodLayout)
+                            {
+                                Taskbar.ApplyNativeAutohidePeekArmed(taskbars[current], settings);
+                                fastPollRemaining = 60;
+                            }
+                            else
+                            {
+                                Taskbar.ApplyNativeAutohidePeekHitRegion(taskbars[current].TaskbarHwnd);
+                                fastPollRemaining = nearEdge ? 60 : 25;
+                            }
                             continue;
                         }
 
-                        if (nativeAutoHide && rectMoved)
+                        if (nativeAutoHide && rectMoved
+                            && Taskbar.IsNativeAutohideHiding(prevTbRect, newTaskbar.TaskbarRect, taskbars[current].TaskbarHwnd))
                         {
-                            // Clear our rounded RGN so Explorer can slide/hide without fighting SetWindowRgn.
+                            Taskbar.SetTaskbarAlpha(taskbars[current].TaskbarHwnd, 1);
                             if (!taskbars[current].NativeAhCleared)
                             {
                                 Taskbar.ResetTaskbar(taskbars[current], settings);
                                 taskbars[current].NativeAhCleared = true;
                             }
+                            Taskbar.SetTaskbarAlpha(taskbars[current].TaskbarHwnd, 1);
                             taskbars[current].TaskbarRect = newTaskbar.TaskbarRect;
                             taskbars[current].AppListRect = newTaskbar.AppListRect;
                             taskbars[current].TrayRect = newTaskbar.TrayRect;
                             taskbars[current].NativeAhFrozen = true;
+                            taskbars[current].NativeAhRevealPending = false;
                             fastPollRemaining = 25;
                             continue;
                         }
 
-                        if (taskbars[current].NativeAhFrozen || taskbars[current].NativeAhCleared)
+                        bool ahShowing = nativeAutoHide && rectMoved
+                            && Taskbar.IsNativeAutohideShowing(prevTbRect, newTaskbar.TaskbarRect, taskbars[current].TaskbarHwnd);
+                        bool leavingPeek = nativeAutoHide
+                            && (taskbars[current].NativeAhFrozen || taskbars[current].NativeAhCleared);
+
+                        if (ahShowing || leavingPeek || taskbars[current].NativeAhRevealPending)
                         {
+                            taskbars[current].NativeAhRevealPending = true;
                             taskbars[current].NativeAhFrozen = false;
                             taskbars[current].NativeAhCleared = false;
-                            taskbars[current].Ignored = true; // force one clean reapply when stable
+                            taskbars[current].FadeAnimDir = 0;
+                            taskbars[current].FadeAnimStep = 0;
+
+                            // Stay near-invisible for the whole slide; Explorer stock paint is then unseen.
+                            Taskbar.SetTaskbarAlpha(taskbars[current].TaskbarHwnd, 1);
+                            Taskbar.ApplyRounding(taskbars[current], newTaskbar, settings);
+
+                            if (!rectMoved)
+                            {
+                                Taskbar.SetTaskbarAlpha(taskbars[current].TaskbarHwnd, 255);
+                                taskbars[current].NativeAhRevealPending = false;
+                            }
+
+                            fastPollRemaining = 60;
+                            continue;
                         }
 
                         // Fill-on-maximise fights native AH and intentionally undoes dynamic rounding.
@@ -382,49 +419,7 @@ namespace RoundedTB
                         {
                             Debug.WriteLine($"Refresh required on taskbar {current}");
                             taskbars[current].Ignored = false;
-
-                            Types.Taskbar measured = newTaskbar;
-                            if (settings.IsDynamic)
-                            {
-                                measured = Taskbar.ClampAppListAwayFromTray(newTaskbar, taskbars[current].ScaleFactor);
-                            }
-
-                            int isFullTest = measured.TrayRect.Left - measured.AppListRect.Right;
-                            Debug.WriteLine($"Taskbar: {current} - AppList ends: {measured.AppListRect.Right} - Tray starts: {measured.TrayRect.Left} - Total gap: {isFullTest}");
-
-                            // Force simple only when tray segment is shown and the gap is tiny (merged full bar).
-                            // When tray is hidden (or hover-only), keep dynamic with clamped width so the pill keeps growing.
-                            bool forceSimpleNearTray = settings.ShowTray
-                                && measured.TrayRect.Left != 0
-                                && isFullTest <= taskbars[current].ScaleFactor * 25
-                                && isFullTest > 0;
-
-                            if (!settings.IsDynamic || forceSimpleNearTray)
-                            {
-                                taskbars[current].TaskbarRect = newTaskbar.TaskbarRect;
-                                taskbars[current].AppListRect = newTaskbar.AppListRect;
-                                taskbars[current].TrayRect = newTaskbar.TrayRect;
-                                Taskbar.UpdateSimpleTaskbar(taskbars[current], settings);
-                            }
-                            else if (Taskbar.CheckDynamicUpdateIsValid(taskbars[current], measured))
-                            {
-                                taskbars[current].TaskbarRect = measured.TaskbarRect;
-                                taskbars[current].AppListRect = measured.AppListRect;
-                                taskbars[current].TrayRect = measured.TrayRect;
-                                Taskbar.UpdateDynamicTaskbar(taskbars[current], settings);
-                            }
-                            else
-                            {
-                                // Avoid freezing the last valid region when validation is overly strict.
-                                int w = measured.AppListRect.Right - measured.AppListRect.Left;
-                                if (w > 20 * taskbars[current].ScaleFactor)
-                                {
-                                    taskbars[current].TaskbarRect = measured.TaskbarRect;
-                                    taskbars[current].AppListRect = measured.AppListRect;
-                                    taskbars[current].TrayRect = measured.TrayRect;
-                                    Taskbar.UpdateDynamicTaskbar(taskbars[current], settings);
-                                }
-                            }
+                            Taskbar.ApplyRounding(taskbars[current], newTaskbar, settings);
                         }
 
                         // During Windows autohide settle, poll faster so we reapply soon after freeze ends.
@@ -449,7 +444,8 @@ namespace RoundedTB
                     if (fastPollRemaining > 0)
                     {
                         fastPollRemaining--;
-                        Thread.Sleep(16);
+                        // Edge-triggered AH peek sets remaining to 60 → 1ms polls; other fast paths use 16ms.
+                        Thread.Sleep(fastPollRemaining >= 40 ? 1 : 16);
                     }
                     else
                     {

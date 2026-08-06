@@ -4,17 +4,12 @@ Guía corta para agentes (Cursor u otros) que abran este repo.
 
 ## Handoff activo (lee primero)
 
-Hay trabajo pendiente de **validación en Windows local**.  
-Detalle completo: [`HANDOFF.md`](HANDOFF.md)
-
-- Rama: `cursor/tray-autohide-fillmax-ac69`
-- PR: https://github.com/Raikadier/RoundedTB/pull/1
-- Cloud Linux **no** puede build/run WPF de verdad → usar Cursor Desktop **This Computer**
-- Primer comando en la máquina del usuario: stash/checkout + `.\build-install-run.ps1` (ver HANDOFF §0)
+Flash al **mostrar** la taskbar con Windows native autohide: trabajo en `master` (v10 alpha-until-stable).  
+Detalle y checklist de prueba: [`HANDOFF.md`](HANDOFF.md) · historial: [`FIXING.md`](FIXING.md) §11.
 
 ## Antes de tocar código
 
-1. Leer [`HANDOFF.md`](HANDOFF.md) si continúas el ciclo tray / AH / FillOnMaximise.
+1. Leer [`HANDOFF.md`](HANDOFF.md) si continúas AH / tray / maximize.
 2. Leer [`FIXING.md`](FIXING.md) — historial completo del hardening y trampas.
 3. Leer [`ARCHITECTURE.md`](ARCHITECTURE.md) — mapa runtime y módulos.
 4. No inventar segunda base de docs fuera del repo para este proyecto.
@@ -34,27 +29,26 @@ Detalle completo: [`HANDOFF.md`](HANDOFF.md)
 - `ShutdownMode=OnExplicitShutdown` — ocultar UI no mata el proceso.
 - Logging debe permanecer activo (crash forensics).
 - Kill forzoso (Administrador de tareas) → proceso `--watchdog` restaura RGN; estado en `%LocalAppData%\rtb.watchdog.json`.
-- **Windows autohide (ABS_AUTOHIDE):** peek = hit-strip; slide = clear RGN + freeze + actualizar rect; estable = rounded. No apilar RTB AutoHide. `FillOnMaximise` se omite con AH nativo.
+- **Windows autohide (ABS_AUTOHIDE):** peek idle = hit-strip; peek+near-edge = pill|strip prearm; hide = clear RGN; show slide = alpha 1 hasta rect estable, luego 255. No apilar RTB AutoHide (rompe maximize full-bleed).
 - **No** reinventar hit-strips full-width *siempre* visibles (pintan bordes fantasma).
+- **No** poner alpha 0/bajo en peek (rompe hover de Windows AH).
 
 ## Comandos
 
 ```powershell
 dotnet build RoundedTB.sln -c Release
 # exe: RoundedTB\bin\Release\net8.0-windows10.0.19041.0\RoundedTB.exe
-
-# Build + Program Files + Start Menu + launch (pide UAC):
 .\build-install-run.ps1
 ```
 
 ## Al diagnosticar
 
-1. ¿Proceso vivo? `Get-Process RoundedTB` (esperar main + watchdog)
-2. Cola de `rtb.log` (heartbeat ~60 s, excepciones, `App.OnExit`, `RestoreAllTaskbars`, `UI hidden`)
+1. ¿Proceso vivo? `Get-Process RoundedTB` (main + `--watchdog`)
+2. Cola de `rtb.log` (heartbeat ~60 s, native autohide, excepciones, `App.OnExit`)
 3. Settings en `rtb.json` — `FillOnMaximise`, `IsDynamic`, `ShowSegmentsOnHover`, `AutoHide`
 4. Dynamic: UIA `TaskbarFrame` desde `InputSite.WindowClass`
-5. Parpadeo + Windows AH: esperado residual; ver FIXING §11 / HANDOFF
+5. Parpadeo + Windows AH: ver FIXING §11 (v6–v10); flicker residual = límite Explorer (torchgm #36)
 
 ## Alcance preferido
 
-Cambios mínimos, evidencia primero (log/rects). No reintroducir dead code (`TaskbarEffect`, `AppBars`, `IAppVisibility`).
+Cambios mínimos, evidencia primero (log/rects/alpha). No reintroducir dead code (`TaskbarEffect`, `AppBars`, `IAppVisibility`).

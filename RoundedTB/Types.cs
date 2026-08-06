@@ -42,6 +42,13 @@ namespace RoundedTB
             public bool NativeAhFrozen { get; set; }
             /// <summary>True after clearing RTB region so Explorer can slide the AppBar away.</summary>
             public bool NativeAhCleared { get; set; }
+            /// <summary>Last stable AppList rect while fully shown — used to pre-arm pill before Windows AH slides up.</summary>
+            public LocalPInvoke.RECT LastGoodAppListRect { get; set; }
+            /// <summary>Last stable Tray rect while fully shown.</summary>
+            public LocalPInvoke.RECT LastGoodTrayRect { get; set; }
+            public bool HasLastGoodLayout { get; set; }
+            /// <summary>True after leaving peek until AH show animation finishes — keep alpha low so stock frames stay invisible.</summary>
+            public bool NativeAhRevealPending { get; set; }
 
             public void Dispose()
             {

@@ -33,7 +33,7 @@ namespace RoundedTB
         public static extern bool IsWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")]
-        public static extern int GetWindowRgn(IntPtr hWnd, out IntPtr hRgn);
+        public static extern int GetWindowRgn(IntPtr hWnd, IntPtr hRgn);
 
         [DllImport("user32.dll")]
         public static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
@@ -65,6 +65,12 @@ namespace RoundedTB
 
         [DllImport("gdi32.dll")]
         public static extern int CombineRgn(IntPtr hrgnDest, IntPtr hrgnSrc1, IntPtr hrgnSrc2, int fnCombineMode);
+
+        public const int RGN_AND = 1;
+        public const int RGN_OR = 2;
+        public const int RGN_XOR = 3;
+        public const int RGN_DIFF = 4;
+        public const int RGN_COPY = 5;
 
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         public static extern int RegisterWindowMessage(string lpString);

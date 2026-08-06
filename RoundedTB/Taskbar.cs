@@ -597,7 +597,7 @@ namespace RoundedTB
                 else
                 {
                     LocalPInvoke.GetWindowRect(hwndCurrent, out LocalPInvoke.RECT rectCurrent);
-                    LocalPInvoke.GetWindowRgn(hwndCurrent, out IntPtr hrgnCurrent);
+                    IntPtr hrgnCurrent = IntPtr.Zero;
                     IntPtr hwndSecTray = IntPtr.Zero;
                     if (isWindows11)
                     {
@@ -720,6 +720,241 @@ namespace RoundedTB
         }
 
         /// <summary>
+        /// Ensure WS_EX_LAYERED and set per-window alpha (0 = invisible). Used to hide stock TB during native AH show.
+        /// </summary>
+        public static void SetTaskbarAlpha(IntPtr hwnd, byte alpha)
+        {
+            if (hwnd == IntPtr.Zero || !LocalPInvoke.IsWindow(hwnd))
+            {
+                return;
+            }
+
+            int style = LocalPInvoke.GetWindowLong(hwnd, LocalPInvoke.GWL_EXSTYLE).ToInt32();
+            if ((style & LocalPInvoke.WS_EX_LAYERED) == 0)
+            {
+                LocalPInvoke.SetWindowLong(hwnd, LocalPInvoke.GWL_EXSTYLE, style | LocalPInvoke.WS_EX_LAYERED);
+            }
+            LocalPInvoke.SetLayeredWindowAttributes(hwnd, 0, alpha, LocalPInvoke.LWA_ALPHA);
+        }
+
+        /// <summary>
+        /// Apply simple or dynamic rounding for current measured rects (shared by worker refresh / AH reveal).
+        /// </summary>
+        public static void ApplyRounding(Types.Taskbar taskbar, Types.Taskbar measured, Types.Settings settings)
+        {
+            Types.Taskbar m = measured;
+            if (settings.IsDynamic)
+            {
+                m = ClampAppListAwayFromTray(measured, taskbar.ScaleFactor);
+
+                // First frames after AH show often report a full-width AppList — keep last good pill.
+                int tbW = Math.Max(1, m.TaskbarRect.Right - m.TaskbarRect.Left);
+                int appW = m.AppListRect.Right - m.AppListRect.Left;
+                if (taskbar.HasLastGoodLayout && appW >= (int)(tbW * 0.9))
+                {
+                    LocalPInvoke.RECT app = taskbar.LastGoodAppListRect;
+                    LocalPInvoke.RECT tray = taskbar.LastGoodTrayRect;
+                    m = new Types.Taskbar
+                    {
+                        TaskbarHwnd = m.TaskbarHwnd,
+                        TrayHwnd = m.TrayHwnd,
+                        AppListHwnd = m.AppListHwnd,
+                        AppListXaml = m.AppListXaml,
+                        TaskbarRect = m.TaskbarRect,
+                        TrayRect = tray.Left != 0 ? tray : m.TrayRect,
+                        AppListRect = app,
+                        ScaleFactor = m.ScaleFactor,
+                        IsSecondary = m.IsSecondary
+                    };
+                }
+            }
+
+            int gap = m.TrayRect.Left - m.AppListRect.Right;
+            bool forceSimpleNearTray = settings.ShowTray
+                && m.TrayRect.Left != 0
+                && gap <= taskbar.ScaleFactor * 25
+                && gap > 0;
+
+            if (!settings.IsDynamic || forceSimpleNearTray)
+            {
+                taskbar.TaskbarRect = measured.TaskbarRect;
+                taskbar.AppListRect = measured.AppListRect;
+                taskbar.TrayRect = measured.TrayRect;
+                if (UpdateSimpleTaskbar(taskbar, settings))
+                {
+                    RememberGoodLayout(taskbar);
+                }
+                return;
+            }
+
+            if (CheckDynamicUpdateIsValid(taskbar, m))
+            {
+                taskbar.TaskbarRect = m.TaskbarRect;
+                taskbar.AppListRect = m.AppListRect;
+                taskbar.TrayRect = m.TrayRect;
+                if (UpdateDynamicTaskbar(taskbar, settings))
+                {
+                    RememberGoodLayout(taskbar);
+                }
+                return;
+            }
+
+            int w = m.AppListRect.Right - m.AppListRect.Left;
+            if (w > 20 * taskbar.ScaleFactor)
+            {
+                taskbar.TaskbarRect = m.TaskbarRect;
+                taskbar.AppListRect = m.AppListRect;
+                taskbar.TrayRect = m.TrayRect;
+                if (UpdateDynamicTaskbar(taskbar, settings))
+                {
+                    RememberGoodLayout(taskbar);
+                }
+            }
+        }
+
+        public static void RememberGoodLayout(Types.Taskbar taskbar)
+        {
+            if (taskbar == null)
+            {
+                return;
+            }
+            int w = taskbar.AppListRect.Right - taskbar.AppListRect.Left;
+            int tbW = taskbar.TaskbarRect.Right - taskbar.TaskbarRect.Left;
+            if (w <= 20 * taskbar.ScaleFactor || (tbW > 0 && w >= tbW * 0.9))
+            {
+                return;
+            }
+            taskbar.LastGoodAppListRect = taskbar.AppListRect;
+            taskbar.LastGoodTrayRect = taskbar.TrayRect;
+            taskbar.HasLastGoodLayout = true;
+        }
+
+        /// <summary>
+        /// While peeked with cursor on the edge: hit-strip OR last-good pill so the bar is already rounded
+        /// when Explorer slides it on-screen (avoids stock full-bar flash).
+        /// </summary>
+        public static bool ApplyNativeAutohidePeekArmed(Types.Taskbar taskbar, Types.Settings settings)
+        {
+            if (taskbar == null || taskbar.TaskbarHwnd == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            if (!taskbar.HasLastGoodLayout)
+            {
+                return ApplyNativeAutohidePeekHitRegion(taskbar.TaskbarHwnd);
+            }
+
+            // Apply last-good pill for current client size, then OR the peek hit-strip for hover.
+            Types.Taskbar measured = new Types.Taskbar
+            {
+                TaskbarHwnd = taskbar.TaskbarHwnd,
+                TrayHwnd = taskbar.TrayHwnd,
+                AppListHwnd = taskbar.AppListHwnd,
+                TaskbarRect = taskbar.TaskbarRect,
+                AppListRect = taskbar.LastGoodAppListRect,
+                TrayRect = taskbar.LastGoodTrayRect,
+                ScaleFactor = taskbar.ScaleFactor,
+                IsSecondary = taskbar.IsSecondary,
+                HasLastGoodLayout = true,
+                LastGoodAppListRect = taskbar.LastGoodAppListRect,
+                LastGoodTrayRect = taskbar.LastGoodTrayRect
+            };
+
+            if (settings.IsDynamic)
+            {
+                taskbar.TaskbarRect = measured.TaskbarRect;
+                taskbar.AppListRect = measured.AppListRect;
+                taskbar.TrayRect = measured.TrayRect;
+                if (!UpdateDynamicTaskbar(taskbar, settings))
+                {
+                    return ApplyNativeAutohidePeekHitRegion(taskbar.TaskbarHwnd);
+                }
+            }
+            else
+            {
+                taskbar.TaskbarRect = measured.TaskbarRect;
+                if (!UpdateSimpleTaskbar(taskbar, settings))
+                {
+                    return ApplyNativeAutohidePeekHitRegion(taskbar.TaskbarHwnd);
+                }
+            }
+
+            IntPtr strip = CreateNativeAutohidePeekStripRegion(taskbar.TaskbarHwnd);
+            if (strip == IntPtr.Zero)
+            {
+                return true; // pill alone is better than nothing
+            }
+
+            IntPtr pillCopy = LocalPInvoke.CreateRectRgn(0, 0, 0, 0);
+            IntPtr combined = LocalPInvoke.CreateRectRgn(0, 0, 0, 0);
+            bool combinedOwnedBySystem = false;
+            try
+            {
+                LocalPInvoke.GetWindowRgn(taskbar.TaskbarHwnd, pillCopy);
+                LocalPInvoke.CombineRgn(combined, pillCopy, strip, LocalPInvoke.RGN_OR);
+                if (LocalPInvoke.SetWindowRgn(taskbar.TaskbarHwnd, combined, true) != 0)
+                {
+                    combinedOwnedBySystem = true;
+                    return true;
+                }
+                return false;
+            }
+            finally
+            {
+                LocalPInvoke.DeleteObject(pillCopy);
+                LocalPInvoke.DeleteObject(strip);
+                if (!combinedOwnedBySystem && combined != IntPtr.Zero)
+                {
+                    LocalPInvoke.DeleteObject(combined);
+                }
+            }
+        }
+
+        static IntPtr CreateNativeAutohidePeekStripRegion(IntPtr hwnd)
+        {
+            if (!LocalPInvoke.GetWindowRect(hwnd, out LocalPInvoke.RECT wr))
+            {
+                return IntPtr.Zero;
+            }
+
+            IntPtr hMon = LocalPInvoke.MonitorFromWindow(hwnd, 2);
+            MonitorStuff.MONITORINFO mi = new MonitorStuff.MONITORINFO();
+            mi.cbSize = (uint)Marshal.SizeOf(mi);
+            if (!MonitorStuff.GetMonitorInfo(hMon, ref mi))
+            {
+                return IntPtr.Zero;
+            }
+
+            LocalPInvoke.RECT mon = mi.rcMonitor;
+            int winW = Math.Max(1, wr.Right - wr.Left);
+            int winH = Math.Max(1, wr.Bottom - wr.Top);
+            int strip = Math.Max(6, winH / 8);
+            if (strip > winH)
+            {
+                strip = winH;
+            }
+
+            if (wr.Bottom > mon.Bottom && wr.Top < mon.Bottom)
+            {
+                return LocalPInvoke.CreateRectRgn(0, 0, winW + 1, strip + 1);
+            }
+            if (wr.Top < mon.Top && wr.Bottom > mon.Top)
+            {
+                return LocalPInvoke.CreateRectRgn(0, winH - strip, winW + 1, winH + 1);
+            }
+            if (wr.Right > mon.Right && wr.Left < mon.Right)
+            {
+                return LocalPInvoke.CreateRectRgn(0, 0, strip + 1, winH + 1);
+            }
+            if (wr.Left < mon.Left && wr.Right > mon.Left)
+            {
+                return LocalPInvoke.CreateRectRgn(winW - strip, 0, winW + 1, winH + 1);
+            }
+            return LocalPInvoke.CreateRectRgn(0, 0, winW + 1, strip + 1);
+        }
+
+        /// <summary>
         /// True when Windows Settings → Automatically hide the taskbar is active for this appbar.
         /// </summary>
         public static bool IsWindowsTaskbarAutoHideEnabled(IntPtr hwnd)
@@ -729,6 +964,45 @@ namespace RoundedTB
             data.hWnd = hwnd;
             IntPtr result = LocalPInvoke.SHAppBarMessage(LocalPInvoke.ABM.GetState, ref data);
             return (result.ToInt32() & LocalPInvoke.ABS.Autohide) == LocalPInvoke.ABS.Autohide;
+        }
+
+        /// <summary>
+        /// Cursor is in the monitor band that typically triggers Windows taskbar autohide reveal.
+        /// Wider than the peek window so we pre-arm before Explorer starts sliding.
+        /// </summary>
+        public static bool IsCursorNearAutohideEdge(IntPtr hwnd, LocalPInvoke.POINT pt)
+        {
+            IntPtr hMon = LocalPInvoke.MonitorFromWindow(hwnd, 2);
+            MonitorStuff.MONITORINFO mi = new MonitorStuff.MONITORINFO();
+            mi.cbSize = (uint)Marshal.SizeOf(mi);
+            if (!MonitorStuff.GetMonitorInfo(hMon, ref mi))
+            {
+                return false;
+            }
+
+            LocalPInvoke.RECT mon = mi.rcMonitor;
+            const int band = 64;
+            if (!LocalPInvoke.GetWindowRect(hwnd, out LocalPInvoke.RECT wr))
+            {
+                return pt.y >= mon.Bottom - band;
+            }
+
+            // Infer dock edge from which side of the monitor the window overhangs / sits on.
+            int midY = (wr.Top + wr.Bottom) / 2;
+            int midX = (wr.Left + wr.Right) / 2;
+            if (midY > (mon.Top + mon.Bottom) / 2)
+            {
+                return pt.y >= mon.Bottom - band;
+            }
+            if (midY < (mon.Top + mon.Bottom) / 2)
+            {
+                return pt.y <= mon.Top + band;
+            }
+            if (midX > (mon.Left + mon.Right) / 2)
+            {
+                return pt.x >= mon.Right - band;
+            }
+            return pt.x <= mon.Left + band;
         }
 
         /// <summary>
@@ -810,15 +1084,15 @@ namespace RoundedTB
         }
 
         /// <summary>
-        /// True when the taskbar window is mostly off its monitor (Windows native autohide peek).
-        /// Upstream (torchgm #36): do not fight SetWindowRgn while peeked/sliding — freeze RTB updates.
+        /// Intersection of a window rect with the monitor that contains <paramref name="hwnd"/>.
+        /// Returns false if rect/monitor lookup fails.
         /// </summary>
-        public static bool IsTaskbarEdgeRevealOnly(IntPtr hwnd)
+        public static bool TryGetVisibleTaskbarArea(IntPtr hwnd, LocalPInvoke.RECT wr, out int visibleW, out int visibleH, out int winW, out int winH)
         {
-            if (!LocalPInvoke.GetWindowRect(hwnd, out LocalPInvoke.RECT wr))
-            {
-                return false;
-            }
+            visibleW = 0;
+            visibleH = 0;
+            winW = Math.Max(1, wr.Right - wr.Left);
+            winH = Math.Max(1, wr.Bottom - wr.Top);
 
             IntPtr hMon = LocalPInvoke.MonitorFromWindow(hwnd, 2);
             MonitorStuff.MONITORINFO mi = new MonitorStuff.MONITORINFO();
@@ -833,10 +1107,26 @@ namespace RoundedTB
             int visBot = Math.Min(wr.Bottom, mon.Bottom);
             int visLeft = Math.Max(wr.Left, mon.Left);
             int visRight = Math.Min(wr.Right, mon.Right);
-            int visibleH = Math.Max(0, visBot - visTop);
-            int visibleW = Math.Max(0, visRight - visLeft);
-            int height = Math.Max(1, wr.Bottom - wr.Top);
-            int width = Math.Max(1, wr.Right - wr.Left);
+            visibleH = Math.Max(0, visBot - visTop);
+            visibleW = Math.Max(0, visRight - visLeft);
+            return true;
+        }
+
+        /// <summary>
+        /// True when the taskbar window is mostly off its monitor (Windows native autohide peek).
+        /// Upstream (torchgm #36): do not fight SetWindowRgn while peeked/sliding — freeze RTB updates.
+        /// </summary>
+        public static bool IsTaskbarEdgeRevealOnly(IntPtr hwnd)
+        {
+            if (!LocalPInvoke.GetWindowRect(hwnd, out LocalPInvoke.RECT wr))
+            {
+                return false;
+            }
+
+            if (!TryGetVisibleTaskbarArea(hwnd, wr, out int visibleW, out int visibleH, out int width, out int height))
+            {
+                return false;
+            }
 
             if (visibleW > width / 2 && visibleH > 0 && visibleH < Math.Max(16, height / 3))
             {
@@ -847,6 +1137,42 @@ namespace RoundedTB
                 return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// Native AH slide toward fully shown: on-monitor visible area grew vs previous rect.
+        /// </summary>
+        public static bool IsNativeAutohideShowing(LocalPInvoke.RECT prevRect, LocalPInvoke.RECT newRect, IntPtr hwnd)
+        {
+            if (!TryGetVisibleTaskbarArea(hwnd, prevRect, out int prevW, out int prevH, out _, out _))
+            {
+                return false;
+            }
+            if (!TryGetVisibleTaskbarArea(hwnd, newRect, out int newW, out int newH, out _, out _))
+            {
+                return false;
+            }
+            int prevArea = prevW * prevH;
+            int newArea = newW * newH;
+            return newArea > prevArea;
+        }
+
+        /// <summary>
+        /// Native AH slide toward peek/off-screen: on-monitor visible area shrank vs previous rect.
+        /// </summary>
+        public static bool IsNativeAutohideHiding(LocalPInvoke.RECT prevRect, LocalPInvoke.RECT newRect, IntPtr hwnd)
+        {
+            if (!TryGetVisibleTaskbarArea(hwnd, prevRect, out int prevW, out int prevH, out _, out _))
+            {
+                return false;
+            }
+            if (!TryGetVisibleTaskbarArea(hwnd, newRect, out int newW, out int newH, out _, out _))
+            {
+                return false;
+            }
+            int prevArea = prevW * prevH;
+            int newArea = newW * newH;
+            return newArea < prevArea;
         }
 
         /// <summary>

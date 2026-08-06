@@ -1,148 +1,82 @@
 # HANDOFF — Continuar en agente Windows local
 
-> **Para el siguiente agente:** este trabajo quedó en Cloud (Linux).  
-> **Debes correr en Cursor Desktop → Run on: This Computer (Windows)**  
-> para build, instalar en Program Files y probar la taskbar.
-
-Fecha: 2026-08-06  
+Fecha: 2026-08-06 (actualizado tarde)  
 Repo: https://github.com/Raikadier/RoundedTB  
-PR: https://github.com/Raikadier/RoundedTB/pull/1  
-Rama: `cursor/tray-autohide-fillmax-ac69` (HEAD tipificado abajo)  
-Base: `master` @ `34d97e3`
+Rama activa: `master`  
+PR #1 (tray / AH v6 / FillOnMaximise / watchdog): **MERGED** → `87e2e4f`
 
 ---
 
-## 0. Arranque obligatorio (Windows)
-
-El usuario en `D:\Github repos\RoundedTB` tenía **cambios locales sin commit** que bloqueaban el checkout. Usar esto primero:
+## 0. Arranque
 
 ```powershell
 cd "D:\Github repos\RoundedTB"
-git stash push -u -m "wip local antes de tray-autohide"
-git fetch origin
-git checkout cursor/tray-autohide-fillmax-ac69
-git pull origin cursor/tray-autohide-fillmax-ac69
+git pull origin master
 .\build-install-run.ps1
 ```
 
-Alternativa destructiva (si el stash no interesa; el remote ya tiene el trabajo):
-
-```powershell
-git reset --hard
-git clean -fd
-git fetch origin
-git checkout cursor/tray-autohide-fillmax-ac69
-.\build-install-run.ps1
-```
-
-`build-install-run.ps1` hace: `dotnet build -c Release` → copia a `C:\Program Files\RoundedTB\` (UAC) → acceso directo Inicio → lanza el exe.
-
-Después de lanzar: confirmar **2** procesos `RoundedTB` (main + `--watchdog`).
+Tras lanzar: **2** procesos `RoundedTB` (main + `--watchdog`).
 
 ---
 
-## 1. Qué pidió el usuario (pendiente de validar en máquina real)
+## 1. Estado validado (PR #1)
 
-| # | Pedido | Estado código | Validar en Windows |
-|---|--------|---------------|--------------------|
-| A | Cerrar UI → system tray (no matar proceso) | Hecho | Cerrar X de config; proceso + icono tray vivos; menú Show/Close |
-| B | Windows auto-hide ON, RTB AutoHide OFF → la TB se esconde y reaparece con hover | Hecho (v6) | Settings Windows AH on; RTB AutoHide=0; mouse al borde |
-| C | Maximizar app no debe “apagar” dynamic / TB entera | Hecho (default FillOnMaximise=false) | Si `rtb.json` aún tiene `FillOnMaximise: true`, **desmarcar** checkbox y Apply |
-| D | Kill por Administrador de tareas no deja TB inutilizable | Hecho (watchdog) | End task del proceso **principal** (no el watchdog); TB debe volver usable |
-| E | Instalar en Program Files + acceso Inicio | Script listo | Tras `build-install-run.ps1` |
-
----
-
-## 2. Cambios ya en la rama (no reimplementar)
-
-### Tray / ciclo de vida
-- `MainWindow.xaml`: `ApplicationNavigation="False"`, `MinimizeToTray="True"`  
-  (`ApplicationNavigation=True` en WPF-UI 1.2.1 ⇒ `Application.Shutdown` al pulsar X).
-- `App.xaml.cs`: `ShutdownMode=OnExplicitShutdown`; modo `--watchdog`.
-- `OnClosing`: cancel + `Hide()` si no es exit real; exit real → `RestoreAllTaskbars` + `Shutdown()`.
-- `ShowMenuItem_Click`: no hace `Close()` del MainWindow; solo accesorios + Hide.
-
-### Windows native autohide (Background + Taskbar)
-- Peek → `ApplyNativeAutohidePeekHitRegion` (franja fina).
-- Slide (`rectMoved`) → `ResetTaskbar` una vez + freeze + **actualizar** `TaskbarRect` (bug anterior: rect stale ⇒ `rectMoved` eterno / no hide).
-- Estable → reaplicar rounded (`Ignored=true`).
-- Con AH nativo: no correr fade de RTB AutoHide; no FillOnMaximise.
-
-### FillOnMaximise
-- Defaults `false` en MainWindow / Interaction.
-- Checkbox: “fill taskbar (disables dynamic rounding)”.
-- Log al arrancar si dynamic + FillOnMaximise aún ON en `rtb.json`.
-
-### Watchdog
-- `RoundedTB/TaskbarWatchdog.cs`
-- Estado: `%LocalAppData%\rtb.watchdog.json`
-- Main publica HWNDs; al kill forzoso el helper limpia `SetWindowRgn`/layered.
-- `MarkGracefulExit` en `RestoreAllTaskbars` para no pelear al salir limpio.
-- Single-instance: por ventana título `RoundedTB`, no por conteo de procesos (el watchdog comparte nombre).
-
-### Otros
-- `res/Headbanner.png` → `HeadBanner.png` (case para Linux/CI).
-- `.github/workflows/ci.yml` → `dotnet build` en `windows-2022` (Actions del fork puede estar sin runs / 403 al disparar).
-
-Docs tocadas: `AGENTS.md`, `FIXING.md` §11, `README.md`.
+| # | Pedido | Estado |
+|---|--------|--------|
+| A | X → system tray | OK |
+| B | Windows AH + RTB Always show (hide/reveal básico) | OK |
+| C | Dynamic + FillOnMaximise off | OK |
+| D | End task → watchdog restaura | OK |
+| E | Program Files + Start menu | OK |
 
 ---
 
-## 3. Commits en la rama
+## 2. Trabajo en curso — flash al **mostrar** con Windows AH
 
-```
-7f6cc40 Add build-install-run.ps1 for one-shot Windows deploy/test.
-e1b1c55 Update CI to dotnet build on windows-2022 with artifacts.
-8462d18 Fix HeadBanner casing for Linux CI and modernize Windows build workflow.
-b9d80f0 Fix tray close, Windows autohide hide path, and FillOnMaximise defaults.
-```
+**Objetivo del usuario:** Windows “Automatically hide the taskbar” ON + RTB AutoHide **Always show**, para maximizar apps a pantalla casi completa (RTB AutoHide no sirve: reserva work-area / no es AppBar real).
 
-(Base hardening previo en `master`: `34d97e3`.)
+**Síntoma:** al aparecer la TB, a menudo un destello de barra stock/entera antes del pill. A veces sale limpia.
+
+**Por qué:** Explorer también pone regiones al deslizar ([torchgm #36](https://github.com/torchgm/RoundedTB/issues/36)). Upstream abandonó Windows AH. No hay port limpio desde Gniang/torchgm.
+
+### Evolución en este fork (ver FIXING.md §11)
+
+| Ver | Idea | Resultado |
+|-----|------|-----------|
+| v7 | Clear RGN solo en hide; en show reaplicar rounded | Mejor, flash sigue |
+| v8 | Opacity-gate en reveal; alpha en peek rompe hover | Gate ok; peek no tocar alpha |
+| v9 | Pre-armar last-good pill\|strip con cursor cerca del borde | Flash deja de ser mayoría, sigue ~mitad |
+| **v10** (código actual) | Pre-arm + **alpha=1 durante todo el slide**; alpha 255 solo con rect estable | Instalado en Program Files; **pendiente feedback del usuario** |
+
+### Archivos tocados (v7–v10)
+
+- `RoundedTB/Background.cs` — máquina de estados native AH
+- `RoundedTB/Taskbar.cs` — `SetTaskbarAlpha`, `ApplyRounding`, `RememberGoodLayout`, `ApplyNativeAutohidePeekArmed`, `IsCursorNearAutohideEdge`, show/hide helpers
+- `RoundedTB/Types.cs` — `LastGood*`, `NativeAhRevealPending`
+- `RoundedTB/LocalPInvoke.cs` — `GetWindowRgn` correcto, `RGN_OR`
+- `FIXING.md`, `AGENTS.md`
+
+### Cómo probar al volver
+
+1. Windows AH ON, RTB AutoHide = Always show, Dynamic ON.  
+2. Hover borde varias veces (~10–20).  
+3. ¿Destello stock? ¿La barra “aparece de golpe” ya redondeada (pop limpio)?  
+4. Log: `%LocalAppData%\rtb.log` — línea `show stays alpha=1 until stable`.
+
+### Si el destello sigue
+
+Siguiente idea (no implementada): `SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE)` en `Shell_TrayWnd` para gate en el mismo instante del move (el poll 1 ms aún pierde frames). No usar RTB AutoHide como “solución” (rompe maximize full-bleed).
 
 ---
 
-## 4. Checklist de prueba (agente Windows)
-
-Validado 2026-08-06 en máquina local (agente Windows) @ `01b5b66` + install Program Files.
-
-1. [x] Checkout limpio de `cursor/tray-autohide-fillmax-ac69`
-2. [x] `.\build-install-run.ps1` OK; exe en Program Files
-3. [x] X en config → proceso sigue; tray icon; log: `UI hidden (close cancelled...)`
-4. [x] Menú tray **Close RoundedTB** → restore + exit; log `RestoreAllTaskbars` / `Exiting` (validado manual 2026-08-06)
-5. [x] Windows AH on, RTB AutoHide 0 → hide al quitar mouse; hover en borde revela (rects Top 766↔720)
-6. [x] Dynamic on, FillOnMaximise **off** → maximizar app mantiene pill (rgnW≈661 vs winW 1366; heartbeat `fillMax=False`)
-7. [x] Task Manager End task al PID main → watchdog restaura TB (rgnType 3→0; `rtb.watchdog.json` borrado; procesos limpios)
-8. [x] Evidencia en log/settings de esta sesión
-
----
-
-## 5. Paths útiles
+## 3. Paths
 
 | Qué | Path |
 |-----|------|
-| Exe build | `RoundedTB\bin\Release\net8.0-windows10.0.19041.0\RoundedTB.exe` |
 | Install | `C:\Program Files\RoundedTB\` |
-| Start menu | `%ProgramData%\Microsoft\Windows\Start Menu\Programs\RoundedTB.lnk` |
 | Settings | `%LocalAppData%\rtb.json` |
 | Log | `%LocalAppData%\rtb.log` |
-| Watchdog state | `%LocalAppData%\rtb.watchdog.json` |
-| Install script (legacy) | `install-to-programfiles.ps1` (si existe en working tree local) |
+| Watchdog | `%LocalAppData%\rtb.watchdog.json` |
 | One-shot | `build-install-run.ps1` |
 
----
-
-## 6. Límites conocidos (no “arreglar” reinventando)
-
-- AH nativo de Windows **siempre** pelea `SetWindowRgn` (torchgm #36). v6 es compromiso; algo de flicker puede quedar.
-- No reintroducir hit-strip full-width **siempre** visible (bordes fantasma).
-- Cloud agent Linux **no puede** ejecutar WPF ni tocar la taskbar real.
-- GitHub Actions del repo: disparo/listado puede dar 403; no depender de CI para validar UX.
-
----
-
-## 7. Tras validar
-
-- Si OK: merge PR #1 a `master` (el usuario o agente local con permiso).
-- Si hay bugs: evidencia en `rtb.log` + commits mínimos en la misma rama; actualizar este HANDOFF y el PR.
-
-Leer también: [`AGENTS.md`](AGENTS.md) · [`FIXING.md`](FIXING.md) · [`ARCHITECTURE.md`](ARCHITECTURE.md)
+Leer: [`AGENTS.md`](AGENTS.md) · [`FIXING.md`](FIXING.md) §11 · [`ARCHITECTURE.md`](ARCHITECTURE.md)
