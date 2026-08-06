@@ -127,32 +127,27 @@ namespace RoundedTB
             background = new Background();
             interaction = new Interaction();
 
-            // Check if RoundedTB is already running, and if it is, do nothing.
-            Process[] matchingProcesses = Process.GetProcessesByName(Process.GetCurrentProcess().ProcessName);
-
-            if (matchingProcesses.Length > 1)
+            // Check if RoundedTB UI is already running (ignore --watchdog helper process).
+            List<IntPtr> existingWindows = Interaction.GetTopLevelWindows();
+            foreach (IntPtr hwnd in existingWindows)
             {
-                List<IntPtr> windowList = Interaction.GetTopLevelWindows();
-                foreach (IntPtr hwnd in windowList)
+                StringBuilder windowClass = new StringBuilder(1024);
+                StringBuilder windowTitle = new StringBuilder(1024);
+                try
                 {
-                    StringBuilder windowClass = new StringBuilder(1024);
-                    StringBuilder windowTitle = new StringBuilder(1024);
-                    try
-                    {
-                        LocalPInvoke.GetClassName(hwnd, windowClass, 1024);
-                        LocalPInvoke.GetWindowText(hwnd, windowTitle, 1024);
+                    LocalPInvoke.GetClassName(hwnd, windowClass, 1024);
+                    LocalPInvoke.GetWindowText(hwnd, windowTitle, 1024);
 
-                        if (windowClass.ToString().Contains("HwndWrapper[RoundedTB.exe") && windowTitle.ToString() == "RoundedTB")
-                        {
-                            LocalPInvoke.SetWindowText(hwnd, "RoundedTB_SettingsRequest");
-                        }
+                    if (windowClass.ToString().Contains("HwndWrapper[RoundedTB.exe") && windowTitle.ToString() == "RoundedTB")
+                    {
+                        LocalPInvoke.SetWindowText(hwnd, "RoundedTB_SettingsRequest");
+                        shouldReallyDieNoReally = true;
+                        isAlreadyRunning = true;
+                        Close();
+                        return;
                     }
-                    catch (Exception) { }
                 }
-                shouldReallyDieNoReally = true;
-                isAlreadyRunning = true;
-                Close();
-                return;
+                catch (Exception) { }
             }
             TrayIconCheck(isForceReset:true);
 
@@ -216,8 +211,8 @@ namespace RoundedTB
                         ShowSecondaryClock = false,
                         CompositionCompat = false,
                         IsNotFirstLaunch = false,
-                        FillOnMaximise = true,
-                        FillOnTaskSwitch = true,
+                        FillOnMaximise = false,
+                        FillOnTaskSwitch = false,
                         ShowSegmentsOnHover = false,
                         AutoHide = 0
                     };
@@ -240,7 +235,7 @@ namespace RoundedTB
                         ShowSecondaryClock = false,
                         CompositionCompat = false,
                         IsNotFirstLaunch = false,
-                        FillOnMaximise = true,
+                        FillOnMaximise = false,
                         FillOnTaskSwitch = false,
                         ShowSegmentsOnHover = false,
                         AutoHide = 0
@@ -341,6 +336,13 @@ namespace RoundedTB
             widgetWidthInput.Text = activeSettings.WidgetsWidth.ToString();
             clockWidthInput.Text = activeSettings.ClockWidth.ToString();
             taskbarDetails = Taskbar.GenerateTaskbarInfo(isWindows11);
+            int pid = Process.GetCurrentProcess().Id;
+            TaskbarWatchdog.PublishHwnds(taskbarDetails.Select(t => t.TaskbarHwnd), pid);
+            TaskbarWatchdog.EnsureStarted(pid);
+            if (activeSettings.FillOnMaximise && activeSettings.IsDynamic)
+            {
+                interaction.AddLog("FillOnMaximise is ON — maximised windows will reset the taskbar to full width (uncheck to keep dynamic rounding)");
+            }
 
             ApplyButton_Click(null, null);
 
@@ -499,6 +501,7 @@ namespace RoundedTB
                     settingsCopy = activeSettings != null ? activeSettings.Clone() : new Types.Settings();
                 }
                 interaction.AddLog($"RestoreAllTaskbars ({reason}) count={bars.Count}");
+                TaskbarWatchdog.MarkGracefulExit(Process.GetCurrentProcess().Id);
                 foreach (Types.Taskbar tb in bars)
                 {
                     try
@@ -712,14 +715,18 @@ namespace RoundedTB
             if (shouldReallyDieNoReally == false)
             {
                 e.Cancel = true;
+                // Keep process alive for tray; OnExplicitShutdown prevents last-window exit.
+                if (Application.Current != null)
+                {
+                    Application.Current.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                }
+                Hide();
                 Visibility = Visibility.Hidden;
                 ShowMenuItem.Header = "Show RoundedTB";
                 interaction.AddLog("UI hidden (close cancelled; process stays alive)");
             }
             else
             {
-
-
                 try
                 {
                     taskbarThread.CancelAsync();
@@ -736,6 +743,10 @@ namespace RoundedTB
 
                 RestoreAllTaskbars("OnClosing");
                 interaction.AddLog("Exiting RoundedTB.");
+                if (Application.Current != null)
+                {
+                    Application.Current.Shutdown();
+                }
             }
             if (!isAlreadyRunning)
             {
@@ -767,15 +778,23 @@ namespace RoundedTB
             if (IsVisible == false)
             {
                 Visibility = Visibility.Visible;
+                Show();
+                Activate();
                 ShowMenuItem.Header = "Hide RoundedTB";
             }
             else
             {
-                // Close any popups - leave main window for now
+                // Close accessory windows only — never Close() MainWindow here (that used to
+                // stack with ApplicationNavigation=True and shut down the whole process).
                 for (int windowCount = App.Current.Windows.Count - 1; windowCount >= 0; windowCount--)
                 {
-                    App.Current.Windows[windowCount].Close();
+                    Window w = App.Current.Windows[windowCount];
+                    if (!ReferenceEquals(w, this))
+                    {
+                        w.Close();
+                    }
                 }
+                Hide();
                 Visibility = Visibility.Hidden;
                 ShowMenuItem.Header = "Show RoundedTB";
             }

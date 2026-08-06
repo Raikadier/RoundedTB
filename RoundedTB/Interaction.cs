@@ -81,8 +81,8 @@ namespace RoundedTB
                         ShowTray = false,
                         CompositionCompat = false,
                         IsNotFirstLaunch = false,
-                        FillOnMaximise = true,
-                        FillOnTaskSwitch = true,
+                        FillOnMaximise = false,
+                        FillOnTaskSwitch = false,
                         ShowSegmentsOnHover = false,
                         AutoHide = 0
                     };
@@ -104,7 +104,7 @@ namespace RoundedTB
                         ShowTray = false,
                         CompositionCompat = false,
                         IsNotFirstLaunch = false,
-                        FillOnMaximise = true,
+                        FillOnMaximise = false,
                         FillOnTaskSwitch = false,
                         ShowSegmentsOnHover = false,
                         AutoHide = 0

@@ -2,6 +2,7 @@ name: release
 
 on:
   push:
+  pull_request:
 
 jobs:
   build:
@@ -10,30 +11,20 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
-      with:
-          submodules: recursive
-          
-    - name: Set up MSBuild
-      uses: microsoft/setup-msbuild@v1
-      
-    - name: NuGet Restore
-      run: |
-        cd ${{ github.workspace }}
-        nuget restore RoundedTB.sln
-      
-    - name: Build
-      run: |
-        cd ${{ github.workspace }}
-        msbuild "-property:Configuration=Release" -t:RoundedTB
+      uses: actions/checkout@v4
 
-    - name: Add commit hash to output folder
-      run: |
-        Rename-Item -Path ".\RoundedTB\bin\Release" -NewName "RoundedTB-$(git rev-parse --short ${{ github.sha }})"
-        
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
       with:
-        name: rtb-artifacts
+        dotnet-version: '8.0.x'
+
+    - name: Build Release
+      run: dotnet build RoundedTB.sln -c Release --nologo
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: RoundedTB-Release-${{ github.sha }}
         path: |
-          .\RoundedTB\bin\RoundedTB-*\
+          RoundedTB/bin/Release/net8.0-windows10.0.19041.0/**
+        if-no-files-found: error

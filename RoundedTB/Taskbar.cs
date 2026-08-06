@@ -655,6 +655,16 @@ namespace RoundedTB
             //{
             //    TaskbarShouldBeFilled(tb.TaskbarHwnd);
             //}
+            try
+            {
+                TaskbarWatchdog.PublishHwnds(
+                    retVal.Select(t => t.TaskbarHwnd),
+                    System.Diagnostics.Process.GetCurrentProcess().Id);
+            }
+            catch
+            {
+                // Watchdog publish is best-effort.
+            }
             return retVal;
         }
 
@@ -719,6 +729,84 @@ namespace RoundedTB
             data.hWnd = hwnd;
             IntPtr result = LocalPInvoke.SHAppBarMessage(LocalPInvoke.ABM.GetState, ref data);
             return (result.ToInt32() & LocalPInvoke.ABS.Autohide) == LocalPInvoke.ABS.Autohide;
+        }
+
+        /// <summary>
+        /// While the taskbar is edge-peeked (native AH), apply only a thin full-width strip so hit-testing
+        /// works. Leaving a centred/rounded RGN from the fully-shown state clips that strip → hover fails.
+        /// Do not use this while the bar is fully shown (causes hairline ghosts in dynamic gaps).
+        /// </summary>
+        public static bool ApplyNativeAutohidePeekHitRegion(IntPtr hwnd)
+        {
+            if (!LocalPInvoke.GetWindowRect(hwnd, out LocalPInvoke.RECT wr))
+            {
+                return false;
+            }
+
+            IntPtr hMon = LocalPInvoke.MonitorFromWindow(hwnd, 2);
+            MonitorStuff.MONITORINFO mi = new MonitorStuff.MONITORINFO();
+            mi.cbSize = (uint)Marshal.SizeOf(mi);
+            if (!MonitorStuff.GetMonitorInfo(hMon, ref mi))
+            {
+                return false;
+            }
+
+            LocalPInvoke.RECT mon = mi.rcMonitor;
+            int winW = Math.Max(1, wr.Right - wr.Left);
+            int winH = Math.Max(1, wr.Bottom - wr.Top);
+            int strip = Math.Max(6, winH / 8);
+            if (strip > winH)
+            {
+                strip = winH;
+            }
+
+            IntPtr region = IntPtr.Zero;
+            bool ownedBySystem = false;
+            try
+            {
+                // Client-relative strip on the edge that still intersects the monitor.
+                if (wr.Bottom > mon.Bottom && wr.Top < mon.Bottom)
+                {
+                    // Bottom-docked, slid down — visible band is the top of the window.
+                    region = LocalPInvoke.CreateRectRgn(0, 0, winW + 1, strip + 1);
+                }
+                else if (wr.Top < mon.Top && wr.Bottom > mon.Top)
+                {
+                    // Top-docked, slid up — visible band is the bottom of the window.
+                    region = LocalPInvoke.CreateRectRgn(0, winH - strip, winW + 1, winH + 1);
+                }
+                else if (wr.Right > mon.Right && wr.Left < mon.Right)
+                {
+                    region = LocalPInvoke.CreateRectRgn(0, 0, strip + 1, winH + 1);
+                }
+                else if (wr.Left < mon.Left && wr.Right > mon.Left)
+                {
+                    region = LocalPInvoke.CreateRectRgn(winW - strip, 0, winW + 1, winH + 1);
+                }
+                else
+                {
+                    region = LocalPInvoke.CreateRectRgn(0, 0, winW + 1, strip + 1);
+                }
+
+                if (region == IntPtr.Zero)
+                {
+                    return false;
+                }
+
+                if (LocalPInvoke.SetWindowRgn(hwnd, region, true) != 0)
+                {
+                    ownedBySystem = true;
+                    return true;
+                }
+                return false;
+            }
+            finally
+            {
+                if (!ownedBySystem && region != IntPtr.Zero)
+                {
+                    LocalPInvoke.DeleteObject(region);
+                }
+            }
         }
 
         /// <summary>

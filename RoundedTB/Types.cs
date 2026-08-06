@@ -40,6 +40,8 @@ namespace RoundedTB
             public bool HoverShowWidgets { get; set; }
             /// <summary>True while skipping SetWindowRgn because Windows native autohide is sliding/peeking.</summary>
             public bool NativeAhFrozen { get; set; }
+            /// <summary>True after clearing RTB region so Explorer can slide the AppBar away.</summary>
+            public bool NativeAhCleared { get; set; }
 
             public void Dispose()
             {

@@ -12,6 +12,17 @@ namespace RoundedTB
     {
         protected override void OnStartup(StartupEventArgs e)
         {
+            // Headless restore helper: no MainWindow (Task Manager hard-kill recovery).
+            if (TaskbarWatchdog.TryHandleArgs(e.Args))
+            {
+                StartupUri = null;
+                Environment.Exit(0);
+                return;
+            }
+
+            // Closing/hiding the config window must not exit the process (tray host stays alive).
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
             DispatcherUnhandledException += App_DispatcherUnhandledException;
             AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
             TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException;

@@ -47,7 +47,7 @@ Hardening on top of Gniang/`b78e5d6` for current Windows 11: GDI region ownershi
 - Full fixing history: [`FIXING.md`](FIXING.md)
 - Architecture map: [`ARCHITECTURE.md`](ARCHITECTURE.md)
 
-**Autohide tip:** Prefer RoundedTB **Always hide**, or Windows “Automatically hide the taskbar” **off**. Combining Windows native autohide with `SetWindowRgn` causes flicker (upstream limitation).
+**Autohide:** Windows “Automatically hide the taskbar” is partially supported (peek hit-strip; clear/freeze while sliding). Some flicker can remain — Explorer also sets window regions (torchgm [#36](https://github.com/torchgm/RoundedTB/issues/36)). Leave RoundedTB’s own AutoHide off when using Windows hide. Uncheck **fill taskbar when maximised** if you want dynamic mode to stay rounded over maximised apps.
 
 Build (requires .NET 8 SDK):
 

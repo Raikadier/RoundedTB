@@ -23,7 +23,8 @@
             <RowDefinition />
         </Grid.RowDefinitions>
 
-        <wpfui:TitleBar x:Name="mainTitleBar" Grid.Row="0" UseNotifyIcon="True" NotifyIconImage="pack://application:,,,/res/traydark.ico" NotifyIconTooltip="RoundedTB" ApplicationNavigation="True" Margin="0,0,0,0" Title="RoundedTB - Configuration" Icon="pack://application:,,,/RoundedTBCanary.ico" Height="51" ShowMaximize="False">
+        <!-- ApplicationNavigation=True calls Application.Shutdown() on X — kills tray host. Keep False so OnClosing can hide to tray. -->
+        <wpfui:TitleBar x:Name="mainTitleBar" Grid.Row="0" UseNotifyIcon="True" NotifyIconImage="pack://application:,,,/res/traydark.ico" NotifyIconTooltip="RoundedTB" ApplicationNavigation="False" MinimizeToTray="True" Margin="0,0,0,0" Title="RoundedTB - Configuration" Icon="pack://application:,,,/RoundedTBCanary.ico" Height="51" ShowMaximize="False">
             <wpfui:TitleBar.NotifyIconMenu>
                 <ContextMenu MouseEnter="ContextMenu_MouseEnter">
                     <CheckBox x:Name ="StartupCheckBox" Content="Run at startup" Click="Startup_Clicked"/>
@@ -65,7 +66,7 @@
 
             <Grid Width="500" Margin="15,0,0,15" HorizontalAlignment="Left" Height="110" VerticalAlignment="Bottom">
                 <CheckBox x:Name="showSegmentsOnHoverCheckBox" Content="Show segments only when hovered over with the mouse - PERFORMANCE ISSUES" Margin="0,0,0,0" VerticalAlignment="Top" Checked="showSegmentsOnHoverCheckBox_Checked" Unchecked="showSegmentsOnHoverCheckBox_Unchecked" HorizontalAlignment="Left" d:LayoutOverrides="HorizontalAlignment, VerticalAlignment"/>
-                <CheckBox x:Name="fillMaximisedCheckBox" Content="When a window is maximised, restore the taskbar" Margin="0,30,0,0" Checked="fillMaximisedCheckBox_Checked"  Unchecked="fillMaximisedCheckBox_Unchecked"  VerticalAlignment="Top" HorizontalAlignment="Left" d:LayoutOverrides="HorizontalAlignment, VerticalAlignment"/>
+                <CheckBox x:Name="fillMaximisedCheckBox" Content="When a window is maximised, fill taskbar (disables dynamic rounding)" Margin="0,30,0,0" Checked="fillMaximisedCheckBox_Checked"  Unchecked="fillMaximisedCheckBox_Unchecked"  VerticalAlignment="Top" HorizontalAlignment="Left" d:LayoutOverrides="HorizontalAlignment, VerticalAlignment"/>
                 <CheckBox x:Name="fillAltTabCheckBox" Content="When alt+tab or win+tab is pressed, restore the taskbar" Margin="0,60,0,0" VerticalAlignment="Top" HorizontalAlignment="Left" d:LayoutOverrides="HorizontalAlignment"/>
                 <CheckBox x:Name="compositionFixCheckBox" Content="Improve compatibility with TranslucentTB and other mods (may cause flickering)" Margin="0,90,0,0" VerticalAlignment="Top" IsChecked="False" Checked="compositionFixCheckBox_Checked" HorizontalAlignment="Left" d:LayoutOverrides="HorizontalAlignment, VerticalAlignment"/>
             </Grid>
