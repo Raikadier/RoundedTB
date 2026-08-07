@@ -49,6 +49,8 @@ namespace RoundedTB
             public bool HasLastGoodLayout { get; set; }
             /// <summary>True after leaving peek until AH show animation finishes — keep alpha low so stock frames stay invisible.</summary>
             public bool NativeAhRevealPending { get; set; }
+            /// <summary>TickCount when rect first went stable during reveal; 0 = still moving. Used to debounce alpha 255.</summary>
+            public int NativeAhRevealStableSinceTick { get; set; }
 
             public void Dispose()
             {

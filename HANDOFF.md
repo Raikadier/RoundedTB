@@ -46,26 +46,29 @@ Tras lanzar: **2** procesos `RoundedTB` (main + `--watchdog`).
 | v7 | Clear RGN solo en hide; en show reaplicar rounded | Mejor, flash sigue |
 | v8 | Opacity-gate en reveal; alpha en peek rompe hover | Gate ok; peek no tocar alpha |
 | v9 | Pre-armar last-good pill\|strip con cursor cerca del borde | Flash deja de ser mayoría, sigue ~mitad |
-| **v10** (código actual) | Pre-arm + **alpha=1 durante todo el slide**; alpha 255 solo con rect estable | Instalado en Program Files; **pendiente feedback del usuario** |
+| **v10** | Pre-arm + **alpha=1 durante todo el slide**; alpha 255 solo con rect estable | Mejor; aún parpadeo ocasional |
+| **v11** (código actual) | + debounce ~80 ms post-stable + `WinEvent LOCATIONCHANGE` → alpha=1 al instante | Pendiente validación usuario |
 
-### Archivos tocados (v7–v10)
+### Archivos tocados (v7–v11)
 
 - `RoundedTB/Background.cs` — máquina de estados native AH
-- `RoundedTB/Taskbar.cs` — `SetTaskbarAlpha`, `ApplyRounding`, `RememberGoodLayout`, `ApplyNativeAutohidePeekArmed`, `IsCursorNearAutohideEdge`, show/hide helpers
-- `RoundedTB/Types.cs` — `LastGood*`, `NativeAhRevealPending`
-- `RoundedTB/LocalPInvoke.cs` — `GetWindowRgn` correcto, `RGN_OR`
-- `FIXING.md`, `AGENTS.md`
+- `RoundedTB/Taskbar.cs` — alpha / rounding / peek-arm helpers
+- `RoundedTB/TaskbarAhFlashGuard.cs` — WinEvent gate (UI thread)
+- `RoundedTB/Types.cs` — `LastGood*`, `NativeAhRevealPending`, stable tick
+- `RoundedTB/LocalPInvoke.cs` — WinEvent + `RGN_OR`
+- `RoundedTB/MainWindow.xaml.cs` — Start/Stop flash guard
+- `FIXING.md`, `AGENTS.md`, `HANDOFF.md`
 
-### Cómo probar al volver
+### Cómo probar
 
 1. Windows AH ON, RTB AutoHide = Always show, Dynamic ON.  
-2. Hover borde varias veces (~10–20).  
-3. ¿Destello stock? ¿La barra “aparece de golpe” ya redondeada (pop limpio)?  
-4. Log: `%LocalAppData%\rtb.log` — línea `show stays alpha=1 until stable`.
+2. Hover borde ~20 veces.  
+3. Esperado: pop redondeado; destello stock raro o nulo.  
+4. Log: `alpha=1 until stable+debounce; WinEvent gate`.
 
-### Si el destello sigue
+### Si aún parpadea
 
-Siguiente idea (no implementada): `SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE)` en `Shell_TrayWnd` para gate en el mismo instante del move (el poll 1 ms aún pierde frames). No usar RTB AutoHide como “solución” (rompe maximize full-bleed).
+Límite Explorer (#36). Opciones residuales: alargar debounce; no usar RTB AutoHide (rompe maximize full-bleed).
 
 ---
 

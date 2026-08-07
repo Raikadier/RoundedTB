@@ -4,7 +4,7 @@ Guía corta para agentes (Cursor u otros) que abran este repo.
 
 ## Handoff activo (lee primero)
 
-Flash al **mostrar** la taskbar con Windows native autohide: trabajo en `master` (v10 alpha-until-stable).  
+Flash al **mostrar** la taskbar con Windows native autohide: trabajo en `master` (v11 WinEvent + debounce).  
 Detalle y checklist de prueba: [`HANDOFF.md`](HANDOFF.md) · historial: [`FIXING.md`](FIXING.md) §11.
 
 ## Antes de tocar código
@@ -29,7 +29,7 @@ Detalle y checklist de prueba: [`HANDOFF.md`](HANDOFF.md) · historial: [`FIXING
 - `ShutdownMode=OnExplicitShutdown` — ocultar UI no mata el proceso.
 - Logging debe permanecer activo (crash forensics).
 - Kill forzoso (Administrador de tareas) → proceso `--watchdog` restaura RGN; estado en `%LocalAppData%\rtb.watchdog.json`.
-- **Windows autohide (ABS_AUTOHIDE):** peek idle = hit-strip; peek+near-edge = pill|strip prearm; hide = clear RGN; show slide = alpha 1 hasta rect estable, luego 255. No apilar RTB AutoHide (rompe maximize full-bleed).
+- **Windows autohide (ABS_AUTOHIDE):** peek idle = hit-strip; peek+near-edge = pill|strip prearm; hide = clear RGN; show = alpha 1 hasta estable+~80 ms + WinEvent LOCATIONCHANGE gate. No apilar RTB AutoHide (rompe maximize full-bleed).
 - **No** reinventar hit-strips full-width *siempre* visibles (pintan bordes fantasma).
 - **No** poner alpha 0/bajo en peek (rompe hover de Windows AH).
 

@@ -493,6 +493,7 @@ namespace RoundedTB
             taskbarsRestoredOnExit = true;
             try
             {
+                TaskbarAhFlashGuard.Stop();
                 List<Types.Taskbar> bars;
                 Types.Settings settingsCopy;
                 lock (DataLock)
@@ -1070,6 +1071,7 @@ namespace RoundedTB
             Debug.WriteLine(System.Windows.Forms.Keys.J.GetHashCode());
             Visibility = Visibility.Hidden;
             Opacity = 1;
+            TaskbarAhFlashGuard.Start();
         }
 
         private void splitHelpButton_Click(object sender, RoutedEventArgs e)

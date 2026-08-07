@@ -143,6 +143,28 @@ namespace RoundedTB
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool GetLayeredWindowAttributes(IntPtr hwnd, out uint crKey, out byte bAlpha, out uint dwFlags);
 
+        public delegate void WinEventDelegate(
+            IntPtr hWinEventHook,
+            uint eventType,
+            IntPtr hwnd,
+            int idObject,
+            int idChild,
+            uint dwEventThread,
+            uint dwmsEventTime);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr SetWinEventHook(
+            uint eventMin,
+            uint eventMax,
+            IntPtr hmodWinEventProc,
+            WinEventDelegate lpfnWinEventProc,
+            uint idProcess,
+            uint idThread,
+            uint dwFlags);
+
+        [DllImport("user32.dll")]
+        public static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
         [DllImport("gdi32.dll")]
         public static extern bool DeleteObject(IntPtr hObject);
 
