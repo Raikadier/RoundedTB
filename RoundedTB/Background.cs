@@ -10,7 +10,6 @@ namespace RoundedTB
 {
     /// <summary>
     /// Opacity steps for non-blocking taskbar fade (one step per worker tick).
-    /// Keep short — with ~16ms fast-poll during fade this is ~30–50ms total.
     /// </summary>
     internal static class FadeSteps
     {
@@ -29,7 +28,6 @@ namespace RoundedTB
         bool redrawOverride = false;
         int infrequentCount = 0;
         int heartbeatCount = 0;
-        bool loggedNativeAutoHideCompat = false;
         int fastPollRemaining = 0;
 
         public Background()
@@ -55,9 +53,6 @@ namespace RoundedTB
             }
         }
 
-        /// <summary>
-        /// Advances one fade step per call (no Thread.Sleep) so the worker keeps polling.
-        /// </summary>
         private static void TickFadeAnimation(Types.Taskbar tb)
         {
             if (tb.FadeAnimDir == 1)
@@ -102,6 +97,8 @@ namespace RoundedTB
         public void DoWork(object sender, DoWorkEventArgs e)
         {
             mw.interaction.AddLog("in bw");
+            // Once: undo any TaskbarAnimations=0 left by older AH experiments in this fork.
+            Taskbar.RestoreExplorerTaskbarAnimations();
             BackgroundWorker worker = sender as BackgroundWorker;
             while (true)
             {
@@ -216,132 +213,9 @@ namespace RoundedTB
                             taskbars[current].AppListHwnd,
                             taskbars[current].AppListXaml);
 
-                        // Windows native autohide (torchgm #36) v11:
-                        // Peek+near-edge: pre-arm. Show: alpha=1 for whole slide + ~80ms after stable (re-ApplyRounding),
-                        // then 255. WinEvent LOCATIONCHANGE also forces alpha=1 instantly (UI thread).
-                        bool nativeAutoHide = Taskbar.IsWindowsTaskbarAutoHideEnabled(taskbars[current].TaskbarHwnd);
-                        if (nativeAutoHide && !loggedNativeAutoHideCompat)
-                        {
-                            mw.interaction.AddLog("Windows native autohide detected - peek arm; alpha=1 until stable+debounce; WinEvent gate (torchgm #36)");
-                            loggedNativeAutoHideCompat = true;
-                        }
-
-                        LocalPInvoke.RECT prevTbRect = taskbars[current].TaskbarRect;
-                        bool rectMoved =
-                            newTaskbar.TaskbarRect.Top != prevTbRect.Top
-                            || newTaskbar.TaskbarRect.Bottom != prevTbRect.Bottom
-                            || newTaskbar.TaskbarRect.Left != prevTbRect.Left
-                            || newTaskbar.TaskbarRect.Right != prevTbRect.Right;
-                        bool peek = nativeAutoHide && Taskbar.IsTaskbarEdgeRevealOnly(taskbars[current].TaskbarHwnd);
-                        bool ahUrgentPoll = false;
-
-                        if (peek)
-                        {
-                            taskbars[current].TaskbarRect = newTaskbar.TaskbarRect;
-                            taskbars[current].AppListRect = newTaskbar.AppListRect;
-                            taskbars[current].TrayRect = newTaskbar.TrayRect;
-                            taskbars[current].NativeAhFrozen = true;
-                            taskbars[current].NativeAhCleared = true;
-                            taskbars[current].NativeAhRevealPending = false;
-                            taskbars[current].NativeAhRevealStableSinceTick = 0;
-                            taskbars[current].FadeAnimDir = 0;
-                            taskbars[current].FadeAnimStep = 0;
-
-                            LocalPInvoke.GetCursorPos(out LocalPInvoke.POINT edgePt);
-                            bool nearEdge = Taskbar.IsCursorNearAutohideEdge(taskbars[current].TaskbarHwnd, edgePt);
-
-                            // Peek must stay fully opaque for Windows AH hit-testing (alpha 1 breaks hover).
-                            Taskbar.SetTaskbarAlpha(taskbars[current].TaskbarHwnd, 255);
-
-                            if (nearEdge && taskbars[current].HasLastGoodLayout)
-                            {
-                                Taskbar.ApplyNativeAutohidePeekArmed(taskbars[current], settings);
-                                ahUrgentPoll = true;
-                            }
-                            else
-                            {
-                                Taskbar.ApplyNativeAutohidePeekHitRegion(taskbars[current].TaskbarHwnd);
-                                ahUrgentPoll = nearEdge;
-                            }
-                            if (ahUrgentPoll)
-                            {
-                                fastPollRemaining = Math.Max(fastPollRemaining, 80);
-                            }
-                            else
-                            {
-                                fastPollRemaining = Math.Max(fastPollRemaining, 25);
-                            }
-                            continue;
-                        }
-
-                        if (nativeAutoHide && rectMoved
-                            && Taskbar.IsNativeAutohideHiding(prevTbRect, newTaskbar.TaskbarRect, taskbars[current].TaskbarHwnd))
-                        {
-                            // Keep opaque until mostly peeked — alpha 1 here can cancel the hide animation hover chain.
-                            if (!taskbars[current].NativeAhCleared)
-                            {
-                                Taskbar.ResetTaskbar(taskbars[current], settings);
-                                taskbars[current].NativeAhCleared = true;
-                            }
-                            taskbars[current].TaskbarRect = newTaskbar.TaskbarRect;
-                            taskbars[current].AppListRect = newTaskbar.AppListRect;
-                            taskbars[current].TrayRect = newTaskbar.TrayRect;
-                            taskbars[current].NativeAhFrozen = true;
-                            taskbars[current].NativeAhRevealPending = false;
-                            taskbars[current].NativeAhRevealStableSinceTick = 0;
-                            fastPollRemaining = Math.Max(fastPollRemaining, 25);
-                            continue;
-                        }
-
-                        bool ahShowing = nativeAutoHide && rectMoved
-                            && Taskbar.IsNativeAutohideShowing(prevTbRect, newTaskbar.TaskbarRect, taskbars[current].TaskbarHwnd);
-                        bool leavingPeek = nativeAutoHide
-                            && (taskbars[current].NativeAhFrozen || taskbars[current].NativeAhCleared);
-
-                        if (ahShowing || leavingPeek || taskbars[current].NativeAhRevealPending)
-                        {
-                            taskbars[current].NativeAhRevealPending = true;
-                            taskbars[current].NativeAhFrozen = false;
-                            taskbars[current].NativeAhCleared = false;
-                            taskbars[current].FadeAnimDir = 0;
-                            taskbars[current].FadeAnimStep = 0;
-
-                            Taskbar.SetTaskbarAlpha(taskbars[current].TaskbarHwnd, 1);
-                            Taskbar.ApplyRounding(taskbars[current], newTaskbar, settings);
-
-                            if (rectMoved)
-                            {
-                                taskbars[current].NativeAhRevealStableSinceTick = 0;
-                            }
-                            else
-                            {
-                                int now = Environment.TickCount;
-                                if (taskbars[current].NativeAhRevealStableSinceTick == 0)
-                                {
-                                    taskbars[current].NativeAhRevealStableSinceTick = now == 0 ? 1 : now;
-                                }
-                                // Hold alpha=1 briefly after stable — Explorer often paints one more stock frame.
-                                const int stableDebounceMs = 80;
-                                int elapsed = now - taskbars[current].NativeAhRevealStableSinceTick;
-                                if (elapsed < 0)
-                                {
-                                    taskbars[current].NativeAhRevealStableSinceTick = now == 0 ? 1 : now;
-                                }
-                                else if (elapsed >= stableDebounceMs)
-                                {
-                                    Taskbar.ApplyRounding(taskbars[current], newTaskbar, settings);
-                                    Taskbar.SetTaskbarAlpha(taskbars[current].TaskbarHwnd, 255);
-                                    taskbars[current].NativeAhRevealPending = false;
-                                    taskbars[current].NativeAhRevealStableSinceTick = 0;
-                                }
-                            }
-
-                            fastPollRemaining = Math.Max(fastPollRemaining, 80);
-                            continue;
-                        }
-
-                        // Fill-on-maximise fights native AH and intentionally undoes dynamic rounding.
-                        if (!nativeAutoHide && Taskbar.TaskbarShouldBeFilled(taskbars[current].TaskbarHwnd, settings))
+                        // Gniang/upstream model: no Windows ABS_AUTOHIDE special-case.
+                        // Peek-strip / overlay / freeze in this fork caused the top-edge flash.
+                        if (Taskbar.TaskbarShouldBeFilled(taskbars[current].TaskbarHwnd, settings))
                         {
                             if (taskbars[current].Ignored == false)
                             {
@@ -351,8 +225,6 @@ namespace RoundedTB
                             continue;
                         }
 
-                        // Hover overrides on the snapshot only — never mutate UI-bound activeSettings.
-                        // Only force refresh on hover *transitions* (Clone() resets ShowTray each loop).
                         if (settings.ShowSegmentsOnHover)
                         {
                             LocalPInvoke.RECT currentTrayRect = taskbars[current].TrayRect;
@@ -377,7 +249,7 @@ namespace RoundedTB
                             }
                         }
 
-                        if (settings.AutoHide > 0 && !nativeAutoHide)
+                        if (settings.AutoHide > 0)
                         {
                             LocalPInvoke.RECT currentTaskbarRect = taskbars[current].TaskbarRect;
                             LocalPInvoke.GetCursorPos(out LocalPInvoke.POINT msPt);
@@ -409,7 +281,6 @@ namespace RoundedTB
                             }
                             else if (taskbars[current].FadeAnimDir == 1 && !isHoveringOverTaskbar)
                             {
-                                // Reverse toward hide mid-animation.
                                 taskbars[current].FadeAnimDir = -1;
                                 taskbars[current].FadeAnimStep = 0;
                             }
@@ -448,17 +319,13 @@ namespace RoundedTB
                             }
                         }
 
-                        if (Taskbar.TaskbarRefreshRequired(taskbars[current], newTaskbar, settings.IsDynamic) || taskbars[current].Ignored || redrawOverride)
+                        if (Taskbar.TaskbarRefreshRequired(taskbars[current], newTaskbar, settings.IsDynamic)
+                            || taskbars[current].Ignored
+                            || redrawOverride)
                         {
                             Debug.WriteLine($"Refresh required on taskbar {current}");
                             taskbars[current].Ignored = false;
                             Taskbar.ApplyRounding(taskbars[current], newTaskbar, settings);
-                        }
-
-                        // During Windows autohide settle, poll faster so we reapply soon after freeze ends.
-                        if (nativeAutoHide && (rectMoved || peek || taskbars[current].Ignored))
-                        {
-                            fastPollRemaining = 25;
                         }
                     }
 
@@ -467,17 +334,8 @@ namespace RoundedTB
                         mw.taskbarDetails = taskbars;
                     }
 
-                    try
-                    {
-                        TaskbarAhFlashGuard.UpdateHwnds(taskbars.ConvertAll(t => t.TaskbarHwnd));
-                    }
-                    catch
-                    {
-                        // Best-effort; flash guard is optional hardening.
-                    }
-
                     heartbeatCount++;
-                    if (heartbeatCount >= 600) // ~60s at 100ms sleep — daily use, not spam
+                    if (heartbeatCount >= 600)
                     {
                         mw.interaction.AddLog($"bw heartbeat bars={taskbars.Count} dyn={settings.IsDynamic} hoverSeg={settings.ShowSegmentsOnHover} fillMax={settings.FillOnMaximise}");
                         heartbeatCount = 0;
@@ -486,8 +344,7 @@ namespace RoundedTB
                     if (fastPollRemaining > 0)
                     {
                         fastPollRemaining--;
-                        // AH reveal/peek-arm uses remaining>=40 → 1ms; other fast paths 16ms.
-                        Thread.Sleep(fastPollRemaining >= 40 ? 1 : 16);
+                        Thread.Sleep(16);
                     }
                     else
                     {
@@ -501,7 +358,6 @@ namespace RoundedTB
                     {
                         mw.interaction.AddLog($"bw TypeInit inner: {tip.InnerException}");
                     }
-                    // Stay alive — previous code rethrew TypeInitializationException and killed the worker.
                     Thread.Sleep(500);
                 }
             }

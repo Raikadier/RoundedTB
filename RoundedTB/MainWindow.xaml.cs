@@ -493,13 +493,21 @@ namespace RoundedTB
             taskbarsRestoredOnExit = true;
             try
             {
-                TaskbarAhFlashGuard.Stop();
+                Taskbar.RestoreExplorerTaskbarAnimations();
                 List<Types.Taskbar> bars;
                 Types.Settings settingsCopy;
                 lock (DataLock)
                 {
                     bars = taskbarDetails != null ? new List<Types.Taskbar>(taskbarDetails) : new List<Types.Taskbar>();
                     settingsCopy = activeSettings != null ? activeSettings.Clone() : new Types.Settings();
+                }
+                foreach (Types.Taskbar tb in bars)
+                {
+                    try
+                    {
+                        Taskbar.SetTaskbarAlpha(tb.TaskbarHwnd, 255);
+                    }
+                    catch { /* best effort */ }
                 }
                 interaction.AddLog($"RestoreAllTaskbars ({reason}) count={bars.Count}");
                 TaskbarWatchdog.MarkGracefulExit(Process.GetCurrentProcess().Id);
@@ -1071,7 +1079,6 @@ namespace RoundedTB
             Debug.WriteLine(System.Windows.Forms.Keys.J.GetHashCode());
             Visibility = Visibility.Hidden;
             Opacity = 1;
-            TaskbarAhFlashGuard.Start();
         }
 
         private void splitHelpButton_Click(object sender, RoutedEventArgs e)

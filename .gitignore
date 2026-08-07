@@ -367,3 +367,7 @@ FodyWeavers.xsd
 graphify-out/
 _diag/
 *.userlog
+
+# Release packaging
+dist/
+

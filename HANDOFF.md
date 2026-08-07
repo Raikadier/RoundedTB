@@ -46,29 +46,11 @@ Tras lanzar: **2** procesos `RoundedTB` (main + `--watchdog`).
 | v7 | Clear RGN solo en hide; en show reaplicar rounded | Mejor, flash sigue |
 | v8 | Opacity-gate en reveal; alpha en peek rompe hover | Gate ok; peek no tocar alpha |
 | v9 | Pre-armar last-good pill\|strip con cursor cerca del borde | Flash deja de ser mayoría, sigue ~mitad |
-| **v10** | Pre-arm + **alpha=1 durante todo el slide**; alpha 255 solo con rect estable | Mejor; aún parpadeo ocasional |
-| **v11** (código actual) | + debounce ~80 ms post-stable + `WinEvent LOCATIONCHANGE` → alpha=1 al instante | Pendiente validación usuario |
+| **v13** | Ganar carrera RGN (timer+estimate) | Flash ↓; **rompe iconos** / Simple margins |
+| **v14** | Overlay máscara | Flash del **borde superior** residual |
+| **v15** (actual) | **Volver al modelo Gniang**: sin máquina ABS_AUTOHIDE | OK si **márgenes = 0** |
 
-### Archivos tocados (v7–v11)
-
-- `RoundedTB/Background.cs` — máquina de estados native AH
-- `RoundedTB/Taskbar.cs` — alpha / rounding / peek-arm helpers
-- `RoundedTB/TaskbarAhFlashGuard.cs` — WinEvent gate (UI thread)
-- `RoundedTB/Types.cs` — `LastGood*`, `NativeAhRevealPending`, stable tick
-- `RoundedTB/LocalPInvoke.cs` — WinEvent + `RGN_OR`
-- `RoundedTB/MainWindow.xaml.cs` — Start/Stop flash guard
-- `FIXING.md`, `AGENTS.md`, `HANDOFF.md`
-
-### Cómo probar
-
-1. Windows AH ON, RTB AutoHide = Always show, Dynamic ON.  
-2. Hover borde ~20 veces.  
-3. Esperado: pop redondeado; destello stock raro o nulo.  
-4. Log: `alpha=1 until stable+debounce; WinEvent gate`.
-
-### Si aún parpadea
-
-Límite Explorer (#36). Opciones residuales: alargar debounce; no usar RTB AutoHide (rompe maximize full-bleed).
+**Lección:** el upstream que funciona no pelea Explorer en AH. Nuestros “fixes” (peek-strip, overlay, TaskbarAnimations=0) **creaban** el destello. Además: con Windows AH, **MarginTop > 0** recorta la franja de hover → la TB no aparece; márgenes 0 = hover OK.
 
 ---
 

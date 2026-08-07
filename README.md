@@ -1,64 +1,75 @@
 ![RoundedTB](https://cdn.discordapp.com/attachments/272509873479221249/891555515799318568/unknown.png)
 
-# RoundedTB
-#### Add margins, rounded corners and segments to your taskbars!
+# RoundedTB (Raikadier fork)
 
-
+Add margins, rounded corners and segments to your Windows taskbar — maintained for **current Windows 11** on **.NET 8**.
 
 ![image](https://user-images.githubusercontent.com/31840547/134795141-76349eaf-12da-40f8-b2a0-d7b7c268d152.png)
 
 ## How do I get it?
 
-You can download the latest version from the [release page](https://github.com/Gniang/RoundedTB/releases).
+Download the latest build from this fork’s [**Releases**](https://github.com/Raikadier/RoundedTB/releases).
 
-The Microsoft Store's RoundedTB is not mine. It's the [original version](https://github.com/RoundedTB/RoundedTB).
+- Upstream community fork: [Gniang/RoundedTB](https://github.com/Gniang/RoundedTB)  
+- Original project: [torchgm/RoundedTB](https://github.com/torchgm/RoundedTB)  
+- The Microsoft Store app is **not** this fork.
 
+**Requirements:** Windows 10 2004+ / Windows 11 (built against `net8.0-windows10.0.19041.0`), [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) if you run the framework-dependent build.
 
-## Known issues
-- Auto-hiding compatibillity. (Widnows taskbar setting)
-  - not working. 
-- Windows 10.
-  - Windows 10 has not been verified. Probably will no longer be supported.
-- TranslucentTB compatibility.
-- Rounded corners are not antialiased.
-  - Due to a Windows limitation. ([#4](https://github.com/torchgm/RoundedTB/issues/4))
-- Dynamic mode won't hide the left side of the taskbar if fisrst started(the taskbar alignment has never been changed).
-  - This can be worked around by changing the alignment to Left and back to Center. ([#98](https://github.com/torchgm/RoundedTB/issues/98)) 
-- When using dynamic mode, the taskbar may occasionally become too large, too small or not update.
-  - This can usually be fixed by moving a window to or from that monitor or briefly changing the taskbar alignment.
-- Dynamic mode may not be released when RoundedTB is exited.
-  - Restarting RoundedTB doesn't help, try restarting the PC.
-- The top of the taskbar is not rounded.
-  - Set the top margin to a larger value (30-50?) , you can adjust the appearance in that session. But it may be a different value when restarted the Windows.
+## What’s new in this fork (v1.1.0)
 
-## Other info
+Validated for recent Windows 11:
 
-RoundedTB was created by torchgm. thanks.
+- Stable worker loop (thread-safe settings, crash logging, no silent worker death)
+- Reliable tray host (close config → stay in tray; Exit restores the stock taskbar)
+- **TaskbarWatchdog** — if RoundedTB is killed from Task Manager, regions are cleared
+- Dynamic mode hardening (AppList/tray clamping, FillOnMaximise default off)
+- Windows **“Automatically hide the taskbar”** + RoundedTB **Always show** works like Gniang when **margins are 0** (especially Top). Non-zero top margin clips the AH hover strip so the bar never appears
+- No experimental AH “flash machines” (peek-strip / overlay / animation registry hacks) — those caused regressions
 
-https://github.com/RoundedTB/RoundedTB
+Quality notes (ISO/IEC 25010): [`QUALITY.md`](QUALITY.md)
 
-torchgm says "RoundedTB is just a hobby of mine, and I'm certainly not an expert in this field, so I'm really sorry if you encounter a bug!".
+## Windows autohide
 
-## This fork (Raikadier hardening)
+| Setting | Recommendation |
+|--------|----------------|
+| Windows Settings → Taskbar → Automatically hide | Optional (full-bleed maximize) |
+| RoundedTB Auto-hide | **Always show** when using Windows hide |
+| Margins (Top/Left/Right/Bottom) | **0** if Windows hide is on |
+| Fill taskbar when maximised | Uncheck to keep Dynamic rounding over maximised apps |
 
-Hardening on top of Gniang/`b78e5d6` for current Windows 11: GDI region ownership, UIA AppList measure, worker thread-safety, fast non-blocking RTB fade, net8, crash logging, reliable taskbar restore on exit, native-autohide freeze (see torchgm [#36](https://github.com/torchgm/RoundedTB/issues/36)).
+## Known limitations
 
-- Agent / maintainer context: [`AGENTS.md`](AGENTS.md)
-- Full fixing history: [`FIXING.md`](FIXING.md)
-- Architecture map: [`ARCHITECTURE.md`](ARCHITECTURE.md)
+- Rounded corners are not antialiased (Win32 `SetWindowRgn` limit — [torchgm #4](https://github.com/torchgm/RoundedTB/issues/4))
+- TranslucentTB: enable “Improve compatibility…” if you use both (may flicker)
+- Dynamic mode quirks on first start / alignment — toggle Left↔Center if the pill looks wrong ([#98](https://github.com/torchgm/RoundedTB/issues/98))
+- Fighting Explorer mid-slide regions is inherently racy ([torchgm #36](https://github.com/torchgm/RoundedTB/issues/36)); this fork follows Gniang’s simple refresh model
 
-**Autohide:** Windows “Automatically hide the taskbar” is partially supported (peek hit-strip; clear/freeze while sliding). Some flicker can remain — Explorer also sets window regions (torchgm [#36](https://github.com/torchgm/RoundedTB/issues/36)). Leave RoundedTB’s own AutoHide off when using Windows hide. Uncheck **fill taskbar when maximised** if you want dynamic mode to stay rounded over maximised apps.
-
-Build (requires .NET 8 SDK):
+## Build
 
 ```powershell
 dotnet build RoundedTB.sln -c Release
+# or one-shot install + run (UAC):
+.\build-install-run.ps1
+# smoke / reliability checks:
+.\scripts\smoke-test.ps1
 ```
 
-Exe: `RoundedTB\bin\Release\net8.0-windows10.0.19041.0\RoundedTB.exe`  
-Logs: `%LocalAppData%\rtb.log` · Config: `%LocalAppData%\rtb.json`
+| Path | Location |
+|------|----------|
+| Exe | `RoundedTB\bin\Release\net8.0-windows10.0.19041.0\RoundedTB.exe` |
+| Config | `%LocalAppData%\rtb.json` |
+| Log | `%LocalAppData%\rtb.log` |
 
-If anything breaks catastrophically, press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Esc</kbd> to open Task Manager, end RoundedTB and then restart Explorer. At worst, just reboot your PC. RoundedTB makes no permanent changes (though it will run on startup if you enable it from the tray icon), so restarting should clear any issues.
+## Docs for contributors / agents
 
+- [`AGENTS.md`](AGENTS.md) — invariants  
+- [`FIXING.md`](FIXING.md) — hardening history & traps  
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — runtime map  
+- [`HANDOFF.md`](HANDOFF.md) — current AH notes  
 
+## Credits
 
+Created by [torchgm](https://github.com/torchgm/RoundedTB). Continued by [Gniang](https://github.com/Gniang/RoundedTB). This repository hardens the Gniang baseline for modern Windows 11.
+
+If something breaks badly: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Esc</kbd> → end RoundedTB → restart Explorer if needed. RoundedTB makes no permanent system changes (aside from optional “start with Windows” from the tray).

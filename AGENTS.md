@@ -4,8 +4,8 @@ Guía corta para agentes (Cursor u otros) que abran este repo.
 
 ## Handoff activo (lee primero)
 
-Flash al **mostrar** la taskbar con Windows native autohide: trabajo en `master` (v11 WinEvent + debounce).  
-Detalle y checklist de prueba: [`HANDOFF.md`](HANDOFF.md) · historial: [`FIXING.md`](FIXING.md) §11.
+Windows AH + Always show: modelo **Gniang** (sin máquina ABS_AUTOHIDE). Con Windows AH, **márgenes = 0** (sobre todo Top) o el hover no revela la TB.  
+Detalle: [`HANDOFF.md`](HANDOFF.md) · trampas: [`FIXING.md`](FIXING.md) §11.
 
 ## Antes de tocar código
 
@@ -29,8 +29,8 @@ Detalle y checklist de prueba: [`HANDOFF.md`](HANDOFF.md) · historial: [`FIXING
 - `ShutdownMode=OnExplicitShutdown` — ocultar UI no mata el proceso.
 - Logging debe permanecer activo (crash forensics).
 - Kill forzoso (Administrador de tareas) → proceso `--watchdog` restaura RGN; estado en `%LocalAppData%\rtb.watchdog.json`.
-- **Windows autohide (ABS_AUTOHIDE):** peek idle = hit-strip; peek+near-edge = pill|strip prearm; hide = clear RGN; show = alpha 1 hasta estable+~80 ms + WinEvent LOCATIONCHANGE gate. No apilar RTB AutoHide (rompe maximize full-bleed).
-- **No** reinventar hit-strips full-width *siempre* visibles (pintan bordes fantasma).
+- **Windows autohide (ABS_AUTOHIDE):** mismo modelo que Gniang — solo rounding normal; no peek-strip/overlay/freeze. **Márgenes (esp. Top) = 0** o se recorta la franja de hover y la TB no aparece. No apilar RTB AutoHide (rompe maximize full-bleed).
+- **No** reinventar hit-strips full-width *siempre* visibles ni pelear `SetWindowRgn` mid-slide (torchgm #36).
 - **No** poner alpha 0/bajo en peek (rompe hover de Windows AH).
 
 ## Comandos
@@ -47,7 +47,7 @@ dotnet build RoundedTB.sln -c Release
 2. Cola de `rtb.log` (heartbeat ~60 s, native autohide, excepciones, `App.OnExit`)
 3. Settings en `rtb.json` — `FillOnMaximise`, `IsDynamic`, `ShowSegmentsOnHover`, `AutoHide`
 4. Dynamic: UIA `TaskbarFrame` desde `InputSite.WindowClass`
-5. Parpadeo + Windows AH: ver FIXING §11 (v6–v10); flicker residual = límite Explorer (torchgm #36)
+5. Parpadeo / AH no aparece: ¿márgenes > 0? Ver FIXING §11 (v15). No reintroducir máquina AH.
 
 ## Alcance preferido
 
