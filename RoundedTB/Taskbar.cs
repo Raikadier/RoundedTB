@@ -967,6 +967,22 @@ namespace RoundedTB
         }
 
         /// <summary>
+        /// True when essentially the entire taskbar window is on-monitor (AH show finished / normal shown).
+        /// </summary>
+        public static bool IsTaskbarFullyShownOnMonitor(IntPtr hwnd)
+        {
+            if (!LocalPInvoke.GetWindowRect(hwnd, out LocalPInvoke.RECT wr))
+            {
+                return false;
+            }
+            if (!TryGetVisibleTaskbarArea(hwnd, wr, out int visibleW, out int visibleH, out int winW, out int winH))
+            {
+                return false;
+            }
+            return visibleH >= (int)(winH * 0.9) && visibleW >= (int)(winW * 0.9);
+        }
+
+        /// <summary>
         /// Cursor is in the monitor band that typically triggers Windows taskbar autohide reveal.
         /// Wider than the peek window so we pre-arm before Explorer starts sliding.
         /// </summary>

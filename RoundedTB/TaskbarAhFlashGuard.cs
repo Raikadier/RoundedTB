@@ -103,7 +103,14 @@ namespace RoundedTB
                 return;
             }
 
-            // Instant gate — worker will ApplyRounding / raise alpha when stable.
+            // Fully shown (e.g. calendar/Action Center open): LOCATIONCHANGE spam + alpha=1
+            // fights the Always-show fade path → infinite flicker. Gate only mid-slide.
+            if (Taskbar.IsTaskbarFullyShownOnMonitor(hwnd))
+            {
+                return;
+            }
+
+            // Instant gate during slide — worker will ApplyRounding / raise alpha when stable.
             Taskbar.SetTaskbarAlpha(hwnd, 1);
         }
     }
