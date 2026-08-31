@@ -11,7 +11,7 @@ Utilidad WPF que redondea/recorta la taskbar **sin patch permanente**: localiza 
 
 | Ítem | Valor |
 |------|--------|
-| TFM | `net8.0-windows10.0.19041.0` |
+| TFM | `net10.0-windows10.0.19041.0` |
 | UI | WPF + WinForms + WPF-UI 1.2.1 |
 | Config | `%LocalAppData%\rtb.json` |
 | Log | `%LocalAppData%\rtb.log` |

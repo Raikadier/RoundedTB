@@ -14,7 +14,7 @@ Download the latest build from this fork’s [**Releases**](https://github.com/R
 - Original project: [torchgm/RoundedTB](https://github.com/torchgm/RoundedTB)  
 - The Microsoft Store app is **not** this fork.
 
-**Requirements:** Windows 10 2004+ / Windows 11 (built against `net8.0-windows10.0.19041.0`), [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) if you run the framework-dependent build.
+**Requirements:** Windows 10 2004+ / Windows 11 (built against `net10.0-windows10.0.19041.0`), [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) if you run the framework-dependent build.
 
 ## What’s new in this fork (v1.1.0)
 
@@ -57,7 +57,7 @@ dotnet build RoundedTB.sln -c Release
 
 | Path | Location |
 |------|----------|
-| Exe | `RoundedTB\bin\Release\net8.0-windows10.0.19041.0\RoundedTB.exe` |
+| Exe | `RoundedTB\bin\Release\net10.0-windows10.0.19041.0\RoundedTB.exe` |
 | Config | `%LocalAppData%\rtb.json` |
 | Log | `%LocalAppData%\rtb.log` |
 

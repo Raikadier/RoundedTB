@@ -4,7 +4,7 @@
 > Complementa: [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`AGENTS.md`](AGENTS.md) · [`README.md`](README.md)
 
 **Base upstream:** [Gniang/RoundedTB](https://github.com/Gniang/RoundedTB) @ `b78e5d6`  
-**Objetivo del fork local:** que RoundedTB sea usable en Win11 actual (dynamic mode, estabilidad, net8) sin reescribir el modelo de clipping.
+**Objetivo del fork local:** que RoundedTB sea usable en Win11 actual (dynamic mode, estabilidad, net10) sin reescribir el modelo de clipping.
 
 **Estado (2026-08-06):** Código de tray-close + AH nativo v6 + FillOnMaximise default off + watchdog está en rama `cursor/tray-autohide-fillmax-ac69` / [PR #1](https://github.com/Raikadier/RoundedTB/pull/1). **Falta validación en Windows local** — ver [`HANDOFF.md`](HANDOFF.md). Cloud Linux no puede ejecutar el exe WPF.
 
@@ -92,9 +92,9 @@ Ahora: `FadeAnimDir` / `FadeAnimStep` + `FadeSteps`; un step de opacidad por tic
 
 `GetWindowRect` del tray secundario usa `hwndSecTray`, no el tray del primario.
 
-### 4.6 P2 — net8 + limpieza
+### 4.6 P2 — net10 + limpieza
 
-- TFM: `net8.0-windows10.0.19041.0`
+- TFM: `net10.0-windows10.0.19041.0`
 - Compatibility package 8.x
 - Dead code eliminado: `AppBars.cs`, `IAppVisibility.cs`, `TaskbarEffect.xaml(.cs)`
 - Deps ruidosas recortadas donde aplicó el csproj
@@ -135,18 +135,18 @@ Ahora: `FadeAnimDir` / `FadeAnimStep` + `FadeSteps`; un step de opacidad por tic
 
 ## 6. Cómo construir y ejecutar (cotidiano)
 
-Requisitos: [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) + Windows Desktop workload.
+Requisitos: [.NET SDK](https://dotnet.microsoft.com/download/dotnet) (10.x) + Windows Desktop workload.
 
 ```powershell
 dotnet build "RoundedTB.sln" -c Release
-Start-Process "RoundedTB\bin\Release\net8.0-windows10.0.19041.0\RoundedTB.exe"
+Start-Process "RoundedTB\bin\Release\net10.0-windows10.0.19041.0\RoundedTB.exe"
 ```
 
 Debug (desarrollo):
 
 ```powershell
 dotnet build "RoundedTB.sln" -c Debug
-Start-Process "RoundedTB\bin\Debug\net8.0-windows10.0.19041.0\RoundedTB.exe"
+Start-Process "RoundedTB\bin\Debug\net10.0-windows10.0.19041.0\RoundedTB.exe"
 ```
 
 Tray icon = UI. Cerrar la ventana **no** mata el proceso (solo oculta). Salir de verdad = menú Exit / `shouldReallyDieNoReally`.
@@ -246,3 +246,26 @@ Tray icon = UI. Cerrar la ventana **no** mata el proceso (solo oculta). Salir de
 - **Fix v14.1:** Residual flash = **stock top edge** (1 frame after overlay hide before RGN, and/or top border visible through the hole). ApplyRounding **before** Hide; overlay hole flush-top + full-width **top-cap** strip; Sync via `Invoke` on reveal start.
 - **Fix v15 (align Gniang):** User confirmed **[Gniang/RoundedTB](https://github.com/Gniang/RoundedTB)** works with Windows AH + Always show and no flash. Upstream has **zero** ABS_AUTOHIDE special-case — only normal `UpdateSimple/Dynamic` on rect change. This fork’s peek-strip / overlay / freeze / TaskbarAnimations gate **was** the top-edge flash. Removed that machine; Background matches upstream model again (keep Clone/lock/fade/watchdog hardening).
 - **Key user finding (v15+):** With Windows AH, **MarginTop (and likely other edge margins) must be 0**. Peek hit-testing uses the on-screen edge of `Shell_TrayWnd`; any top inset from `SetWindowRgn` removes that strip → hover does nothing / bar won’t show. Gniang “works” when margins are 0; `MarginTop=3` looked like an AH bug but was clipping.
+
+---
+
+## 12. Follow-up fixes (2026-08-31)
+
+### Auto-start entry pointed at the DLL, not the EXE (ya reparado)
+- **Symptom:** Startup apps showed a DLL (`RoundedTB.dll`) instead of `RoundedTB.exe`, so RoundedTB did not auto-start / the .lnk target was wrong.
+- **Cause:** `MainWindow.EnableStartup()` and `IsStartupLinkValid()` resolved the shortcut target via `Environment.GetCommandLineArgs()[0]`. In a framework-dependent .NET build (`RoundedTB.exe` is only the **apphost** that loads `RoundedTB.dll`), this can return the path to the DLL (or the `dotnet` host) depending on how the process was launched — not the EXE.
+- **Fix:** New helper `GetProcessExecutablePath()` using `Environment.ProcessPath` with fallback to `Process.GetCurrentProcess().MainModule?.FileName` and finally `Path.Combine(AppContext.BaseDirectory, "RoundedTB.exe")` — the same resilient pattern already used by `TaskbarWatchdog` (`TaskbarWatchdog.cs`). Both `EnableStartup()` and `IsStartupLinkValid()` now use it.
+- **Also fixed:** `build-install-run.ps1` copied from the stale `bin\Release\net8.0-windows10.0.19041.0` output; the csproj had moved to `net10.0-windows10.0.19041.0`, so reinstalls could unknowingly deploy an old binary. Updated the script’s source path to `net10.0-windows10.0.19041.0`.
+- **Verified:** build OK; reinstall + relaunch from `C:\Program Files\RoundedTB\RoundedTB.exe`; shortcut now targets the EXE. Startup is off by default until the user re-enables “Run at startup” in the UI.
+
+### Removed vulnerable `System.Data.SqlClient` (transitive) — NU1903
+- **Symptom:** `dotnet build` reported `NU1903`: `System.Data.SqlClient 4.8.5` has a known high-severity vulnerability (advisory GHSA-98g6-xh36-x2p7).
+- **Cause:** `System.Data.SqlClient` was pulled in **transitively** by the kitchen-sink package `Microsoft.Windows.Compatibility 8.0.0`. No `.cs` file in the project uses `SqlClient` / `SqlConnection` or any namespace requiring that package (`System.Data.*`, `System.ServiceModel`, `System.Speech`, `System.IO.Ports`, `System.Management`, `System.DirectoryServices`).
+- **Fix:** Removed the `Microsoft.Windows.Compatibility` PackageReference. Verified the build still succeeds (all required namespaces come from the WPF/WinForms desktop framework, not the package).
+- **Also removed:** redundant `Microsoft.CSharp 4.7.0` PackageReference (auto-provided in .NET; `NU1510`).
+- **Net effect:** warnings dropped from 8 → 1 (the remaining `CS0162` at `MainWindow.xaml.cs:549` is intentional `if (false)` + `TODO` blocked-off code in `TrayIconCheck`, left untouched).
+- **Verification (installed copy):** after reinstall, `System.Data.SqlClient.dll`, `System.ServiceModel.dll`, `System.Speech.dll`, `System.IO.Ports.dll`, `System.Management.dll`, `System.DirectoryServices.dll` are no longer present in `C:\Program Files\RoundedTB`.
+
+### TFM consolidation (net8 → net10)
+- The csproj/`RoundedTB.csproj` targets **`net10.0-windows10.0.19041.0`** (was `net8.0` in earlier docs). `build-install-run.ps1`, `ARCHITECTURE.md`, `AGENTS.md`, `FIXING.md` §4.6/§6, `.github/workflows/ci.yml`, `README.md` and `QUALITY.md` all updated to `net10.0-windows10.0.19041.0`.
+- `bin\Release` still contains **stale** outputs from prior frameworks `net6.0`, `net8.0`, and `net8.0-windows10.0.22621` — not installed, harmless build residue.

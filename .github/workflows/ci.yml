@@ -16,7 +16,7 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '8.0.x'
+        dotnet-version: '10.0.x'
 
     - name: Build Release
       run: dotnet build RoundedTB.sln -c Release --nologo
@@ -26,5 +26,5 @@ jobs:
       with:
         name: RoundedTB-Release-${{ github.sha }}
         path: |
-          RoundedTB/bin/Release/net8.0-windows10.0.19041.0/**
+          RoundedTB/bin/Release/net10.0-windows10.0.19041.0/**
         if-no-files-found: error

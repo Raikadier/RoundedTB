@@ -159,10 +159,14 @@ namespace RoundedTB
                 logPath = Path.Combine(Windows.Storage.ApplicationData.Current.RoamingFolder.Path, "rtb.log");
             }
 
-            if (System.IO.File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "RoundedTB.lnk")) && !IsRunningAsUWP())
+            if (!IsRunningAsUWP() && IsStartupLinkValid() && IsStartupApprovedEnabled())
             {
                 StartupCheckBox.IsChecked = true;
                 ShowMenuItem.Header = "Show RoundedTB";
+            }
+            else if (!IsRunningAsUWP())
+            {
+                StartupCheckBox.IsChecked = false;
             }
             taskbarThread.WorkerSupportsCancellation = true;
             taskbarThread.WorkerReportsProgress = true;
@@ -819,13 +823,13 @@ namespace RoundedTB
             }
             else
             {
-                if (System.IO.File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "RoundedTB.lnk")))
+                if (StartupCheckBox.IsChecked == true)
                 {
-                    System.IO.File.Delete(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "RoundedTB.lnk"));
+                    EnableStartup();
                 }
                 else
                 {
-                    EnableStartup();
+                    DisableStartup();
                 }
             }
         }
@@ -839,8 +843,7 @@ namespace RoundedTB
                 {
                     Directory.CreateDirectory(shortcutFolder);
                 }
-                string rtbStartupLink = Path.Combine(shortcutFolder, "RoundedTB.lnk");
-                string targetPath = Environment.GetCommandLineArgs()[0];
+                string targetPath = GetProcessExecutablePath();
                 // Late-bound WScript.Shell — avoids COMReference (unsupported on .NET SDK MSBuild).
                 Type shellType = Type.GetTypeFromProgID("WScript.Shell");
                 if (shellType == null)
@@ -848,16 +851,118 @@ namespace RoundedTB
                     return;
                 }
                 dynamic shell = Activator.CreateInstance(shellType);
-                dynamic shortcut = shell.CreateShortcut(rtbStartupLink);
+                dynamic shortcut = shell.CreateShortcut(StartupLinkPath);
                 shortcut.TargetPath = targetPath;
                 shortcut.IconLocation = targetPath;
+                shortcut.WorkingDirectory = Path.GetDirectoryName(targetPath);
                 shortcut.Arguments = "";
                 shortcut.Description = "Start RoundedTB";
                 shortcut.Save();
+                SetStartupApproved(true);
             }
             catch (Exception)
             {
             }
+        }
+
+        public void DisableStartup()
+        {
+            try
+            {
+                if (System.IO.File.Exists(StartupLinkPath))
+                {
+                    System.IO.File.Delete(StartupLinkPath);
+                }
+                SetStartupApproved(false);
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        public bool IsStartupLinkValid()
+        {
+            try
+            {
+                if (!System.IO.File.Exists(StartupLinkPath))
+                {
+                    return false;
+                }
+                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType == null)
+                {
+                    return false;
+                }
+                dynamic shell = Activator.CreateInstance(shellType);
+                dynamic shortcut = shell.CreateShortcut(StartupLinkPath);
+                string target = shortcut.TargetPath as string;
+                return target != null
+                    && string.Equals(target, GetProcessExecutablePath(), StringComparison.OrdinalIgnoreCase)
+                    && System.IO.File.Exists(target);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        public bool IsStartupApprovedEnabled()
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(StartupApprovedKey))
+                {
+                    if (key == null)
+                    {
+                        return true;
+                    }
+                    byte[] data = key.GetValue("RoundedTB.lnk") as byte[];
+                    if (data == null || data.Length == 0)
+                    {
+                        return true;
+                    }
+                    return data[0] == 0x02;
+                }
+            }
+            catch (Exception)
+            {
+                return true;
+            }
+        }
+
+        public void SetStartupApproved(bool enabled)
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.CreateSubKey(StartupApprovedKey))
+                {
+                    if (enabled)
+                    {
+                        key.SetValue("RoundedTB.lnk", new byte[12] { 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, RegistryValueKind.Binary);
+                    }
+                    else
+                    {
+                        key.DeleteValue("RoundedTB.lnk", false);
+                    }
+                }
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        private static string StartupLinkPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "RoundedTB.lnk");
+
+        private static readonly string StartupApprovedKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder";
+
+        // Returns the real process executable path — NOT Environment.GetCommandLineArgs()[0],
+        // which can point at RoundedTB.dll (or the dotnet host) in framework-dependent .NET
+        // builds. Same resilient pattern as TaskbarWatchdog.EnsureStarted.
+        private static string GetProcessExecutablePath()
+        {
+            return Environment.ProcessPath
+                ?? Process.GetCurrentProcess().MainModule?.FileName
+                ?? Path.Combine(AppContext.BaseDirectory, "RoundedTB.exe");
         }
 
         async Task StartupToggle()

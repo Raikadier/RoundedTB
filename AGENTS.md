@@ -16,7 +16,7 @@ Detalle: [`HANDOFF.md`](HANDOFF.md) · trampas: [`FIXING.md`](FIXING.md) §11.
 
 ## Stack rápido
 
-- WPF · `net8.0-windows10.0.19041.0`
+- WPF · `net10.0-windows10.0.19041.0`
 - Loop: `Background.DoWork` ~100 ms → `Taskbar.UpdateSimple/Dynamic` → `SetWindowRgn`
 - Config/log: `%LocalAppData%\rtb.json` / `rtb.log`
 
@@ -37,7 +37,7 @@ Detalle: [`HANDOFF.md`](HANDOFF.md) · trampas: [`FIXING.md`](FIXING.md) §11.
 
 ```powershell
 dotnet build RoundedTB.sln -c Release
-# exe: RoundedTB\bin\Release\net8.0-windows10.0.19041.0\RoundedTB.exe
+# exe: RoundedTB\bin\Release\net10.0-windows10.0.19041.0\RoundedTB.exe
 .\build-install-run.ps1
 ```
 

@@ -6,7 +6,7 @@ Write-Host 'Building Release...'
 dotnet build RoundedTB.sln -c Release --nologo
 if ($LASTEXITCODE -ne 0) { throw 'build failed' }
 
-$src = Join-Path $PSScriptRoot 'RoundedTB\bin\Release\net8.0-windows10.0.19041.0'
+$src = Join-Path $PSScriptRoot 'RoundedTB\bin\Release\net10.0-windows10.0.19041.0'
 $dest = 'C:\Program Files\RoundedTB'
 $startLnk = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\RoundedTB.lnk'
 

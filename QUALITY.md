@@ -1,7 +1,7 @@
 # Calidad — ISO/IEC 25010 (fork Raikadier)
 
 Evaluación práctica del producto frente a las características de calidad de [ISO/IEC 25010](https://iso25000.com/index.php/en/iso-25000-standards/iso-25010).  
-Fecha de release: **v1.1.0** · Target: **Windows 11** (`net8.0-windows10.0.19041.0+`).
+Fecha de release: **v1.1.0** · Target: **Windows 11** (`net10.0-windows10.0.19041.0+`).
 
 | Característica | Qué cubre RoundedTB | Evidencia / control |
 |----------------|---------------------|---------------------|
